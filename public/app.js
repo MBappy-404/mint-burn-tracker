@@ -5,12 +5,35 @@ let eventsList = [];
 
 // Formatting helpers
 function formatUSD(num) {
-  if (num === undefined || num === null) return '$0';
+  if (num === undefined || num === null || isNaN(num)) return '$0';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 0
   }).format(num);
+}
+
+function formatCompactUSD(num, includeDollar = true) {
+  if (num === undefined || num === null || isNaN(num)) return includeDollar ? '$0' : '0';
+  const isNegative = num < 0;
+  const abs = Math.abs(num);
+  const prefix = includeDollar ? '$' : '';
+
+  let formatted = '';
+  if (abs >= 1_000_000_000) {
+    const val = abs / 1_000_000_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'B';
+  } else if (abs >= 1_000_000) {
+    const val = abs / 1_000_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'M';
+  } else if (abs >= 1_000) {
+    const val = abs / 1_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'K';
+  } else {
+    formatted = abs.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+
+  return `${isNegative ? '-' : ''}${prefix}${formatted}`;
 }
 
 function formatShortAddress(address) {
@@ -60,16 +83,24 @@ async function fetchStatusAndStats() {
       const usdt24 = stats.last24Hours.USDT;
       const usdc24 = stats.last24Hours.USDC;
 
-      document.getElementById('stat-usdt-mint').textContent = formatUSD(usdt24.mint);
+      const elUsdtMint = document.getElementById('stat-usdt-mint');
+      elUsdtMint.textContent = formatCompactUSD(usdt24.mint);
+      elUsdtMint.title = `Full: ${formatUSD(usdt24.mint)}`;
       document.getElementById('stat-usdt-mint-count').textContent = `${usdt24.mintCount} txs (24h)`;
 
-      document.getElementById('stat-usdt-burn').textContent = formatUSD(usdt24.burn);
+      const elUsdtBurn = document.getElementById('stat-usdt-burn');
+      elUsdtBurn.textContent = formatCompactUSD(usdt24.burn);
+      elUsdtBurn.title = `Full: ${formatUSD(usdt24.burn)}`;
       document.getElementById('stat-usdt-burn-count').textContent = `${usdt24.burnCount} txs (24h)`;
 
-      document.getElementById('stat-usdc-mint').textContent = formatUSD(usdc24.mint);
+      const elUsdcMint = document.getElementById('stat-usdc-mint');
+      elUsdcMint.textContent = formatCompactUSD(usdc24.mint);
+      elUsdcMint.title = `Full: ${formatUSD(usdc24.mint)}`;
       document.getElementById('stat-usdc-mint-count').textContent = `${usdc24.mintCount} txs (24h)`;
 
-      document.getElementById('stat-usdc-burn').textContent = formatUSD(usdc24.burn);
+      const elUsdcBurn = document.getElementById('stat-usdc-burn');
+      elUsdcBurn.textContent = formatCompactUSD(usdc24.burn);
+      elUsdcBurn.title = `Full: ${formatUSD(usdc24.burn)}`;
       document.getElementById('stat-usdc-burn-count').textContent = `${usdc24.burnCount} txs (24h)`;
     }
   } catch (err) {
@@ -131,7 +162,10 @@ function renderEventsTable(events) {
             <span>${tokenIcon}</span> ${ev.token}
           </span>
         </td>
-        <td class="amount-cell">${formatUSD(ev.amountFormatted)}</td>
+        <td class="amount-cell" title="Exact: ${formatUSD(ev.amountFormatted)}">
+          <span class="amount-compact">${formatCompactUSD(ev.amountFormatted)}</span>
+          <span class="amount-detail">(${formatUSD(ev.amountFormatted)})</span>
+        </td>
         <td>
           <a href="https://etherscan.io/address/${ev.from}" target="_blank" class="address-tag" title="${ev.from}">
             ${fromDisplay}
@@ -173,7 +207,7 @@ function setupSSE() {
 
       // Show clean toast for real institutional transactions
       const icon = data.eventType === 'MINT' ? '🟢 MINT' : '🔥 BURN';
-      showToast(`${icon}: ${formatUSD(data.amountFormatted)} ${data.token} verified on-chain!`, data.eventType.toLowerCase());
+      showToast(`${icon}: ${formatCompactUSD(data.amountFormatted)} ${data.token} verified on-chain!`, data.eventType.toLowerCase());
 
       renderEventsTable(eventsList);
       fetchStatusAndStats();

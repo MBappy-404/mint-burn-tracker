@@ -236,6 +236,30 @@ app.post('/api/events/delete', async (req, res) => {
   }
 });
 
+// Keep-alive heartbeat for Render Free Tier (pings every 10 minutes to prevent sleep)
+function startKeepAliveHeartbeat() {
+  const appUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
+  if (!appUrl) {
+    logger.info('💡 Tip: Add your Render URL to UptimeRobot (https://uptimerobot.com) to keep Render awake 24/7 for free.');
+    return;
+  }
+
+  const pingInterval = 10 * 60 * 1000; // 10 minutes (before Render 15m timeout)
+  const pingUrl = `${appUrl.replace(/\/$/, '')}/api/status`;
+  logger.info(`💓 Keep-alive heartbeat enabled: Pinging ${pingUrl} every 10m to prevent Render sleep.`);
+
+  setInterval(async () => {
+    try {
+      const res = await fetch(pingUrl);
+      if (res.ok) {
+        logger.debug('💓 Keep-alive self-ping successful');
+      }
+    } catch (e) {
+      logger.debug('💓 Keep-alive self-ping error:', e.message);
+    }
+  }, pingInterval);
+}
+
 // Start Server & Services
 async function bootstrap() {
   try {
@@ -252,7 +276,10 @@ async function bootstrap() {
     // 3. Start Blockchain Listener
     await initBlockchainListener();
 
-    // 4. Start Web API Server
+    // 4. Start Keep-Alive Heartbeat
+    startKeepAliveHeartbeat();
+
+    // 5. Start Web API Server
     app.listen(PORT, () => {
       logger.info(`🌐 Web Dashboard & API Server live at: http://localhost:${PORT}`);
       logger.info(`🤖 Telegram Bot is ready for commands (@MintFatherBot)`);

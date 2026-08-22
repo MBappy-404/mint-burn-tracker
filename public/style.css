@@ -502,6 +502,20 @@ body {
   font-weight: 700;
   font-size: 14px;
   color: #ffffff;
+  white-space: nowrap;
+}
+
+.amount-compact {
+  color: #38bdf8;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.amount-detail {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-left: 5px;
 }
 
 .address-tag {

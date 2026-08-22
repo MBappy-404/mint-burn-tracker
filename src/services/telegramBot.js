@@ -7,8 +7,35 @@ import { TOKENS, EXPLORER_BASE, getEntityLabel } from '../config/constants.js';
 let bot = null;
 let botInfo = null;
 
+// Helper to format currency numbers compactly (e.g., $100K, $25.5M, $1B)
+export function formatCompactUSD(num, includeDollar = true) {
+  if (num === undefined || num === null || isNaN(num)) {
+    return includeDollar ? '$0' : '0';
+  }
+  const isNegative = num < 0;
+  const abs = Math.abs(num);
+  const prefix = includeDollar ? '$' : '';
+
+  let formatted = '';
+  if (abs >= 1_000_000_000) {
+    const val = abs / 1_000_000_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'B';
+  } else if (abs >= 1_000_000) {
+    const val = abs / 1_000_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'M';
+  } else if (abs >= 1_000) {
+    const val = abs / 1_000;
+    formatted = (val % 1 === 0 ? val.toFixed(0) : val.toFixed(val >= 100 ? 1 : 2).replace(/\.?0+$/, '')) + 'K';
+  } else {
+    formatted = abs.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+
+  return `${isNegative ? '-' : ''}${prefix}${formatted}`;
+}
+
 // Helper to format currency numbers cleanly (e.g., $250,000,000)
 export function formatCurrency(amount) {
+  if (amount === undefined || amount === null || isNaN(amount)) return '$0';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
@@ -16,12 +43,32 @@ export function formatCurrency(amount) {
   }).format(amount);
 }
 
+// Parse user threshold inputs supporting suffixes like 100k, 5M, 1B
+export function parseThresholdInput(str) {
+  if (!str) return NaN;
+  const clean = str.replace(/[\$,]/g, '').trim().toUpperCase();
+  if (clean.endsWith('B')) {
+    const num = Number(clean.slice(0, -1));
+    return isNaN(num) ? NaN : num * 1_000_000_000;
+  }
+  if (clean.endsWith('M')) {
+    const num = Number(clean.slice(0, -1));
+    return isNaN(num) ? NaN : num * 1_000_000;
+  }
+  if (clean.endsWith('K')) {
+    const num = Number(clean.slice(0, -1));
+    return isNaN(num) ? NaN : num * 1_000;
+  }
+  return Number(clean);
+}
+
 // Generate rich mobile-friendly Markdown alert text
 export function formatAlertMessage(event) {
   let header = '';
   let actionDetails = '';
   const tokenMeta = TOKENS[event.token] || { icon: '🪙', symbol: event.token };
-  const formattedAmount = formatCurrency(event.amountFormatted);
+  const compactAmount = formatCompactUSD(event.amountFormatted);
+  const fullAmount = formatCurrency(event.amountFormatted);
 
   if (event.eventType === 'MINT') {
     header = `🟢 *${event.token} MINT / ISSUED* ${tokenMeta.icon}`;
@@ -40,7 +87,7 @@ export function formatAlertMessage(event) {
   let message = `━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `${header}\n`;
   message += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  message += `💰 *Amount:* \`${formattedAmount}\` (${Number(event.amountFormatted).toLocaleString()} ${event.token})\n`;
+  message += `💰 *Amount:* \`${compactAmount}\` (${fullAmount} ${event.token})\n`;
   message += `🌐 *Network:* ${event.network || 'Ethereum Mainnet'}\n`;
   message += `📦 *Block:* \`#${event.blockNumber?.toLocaleString() || 'N/A'}\`\n\n`;
   message += `${actionDetails}\n\n`;
@@ -87,13 +134,13 @@ export function getMainInlineKeyboard() {
 // Inline Threshold Quick Selector Keyboard
 export function getThresholdSelectorKeyboard() {
   return new InlineKeyboard()
-    .text('$10,000', 'set_th_10000')
-    .text('$50,000', 'set_th_50000')
-    .text('$100,000', 'set_th_100000')
+    .text('$10K', 'set_th_10000')
+    .text('$50K', 'set_th_50000')
+    .text('$100K', 'set_th_100000')
     .row()
-    .text('$500,000', 'set_th_500000')
-    .text('$1,000,000', 'set_th_1000000')
-    .text('$5,000,000', 'set_th_5000000')
+    .text('$500K', 'set_th_500000')
+    .text('$1M', 'set_th_1000000')
+    .text('$5M', 'set_th_5000000')
     .row()
     .text('⚡ All Events ($0)', 'set_th_0')
     .row()
@@ -142,7 +189,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
 • 🏛️ **Tether Treasury Movements**
 
 🔔 *Status:* Alerts are **ACTIVE**
-⚙️ *Current Threshold:* \`$100,000+\`
+⚙️ *Current Threshold:* \`$100K+\`
 
 📱 *Mobile Controls:* You can use the bottom touch buttons anytime, or use the interactive menu below:`;
 
@@ -193,11 +240,10 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
         return sendThresholdMenuReply(ctx);
       }
 
-      const inputVal = parts[1].replace(/[\$,]/g, '');
-      const newThreshold = Number(inputVal);
+      const newThreshold = parseThresholdInput(parts[1]);
 
       if (isNaN(newThreshold) || newThreshold < 0) {
-        return ctx.reply('❌ Invalid amount. Please enter a valid positive number.\nExample: `/threshold 250000`', { parse_mode: 'Markdown' });
+        return ctx.reply('❌ Invalid amount. Please enter a valid number (e.g., `/threshold 100k`, `/threshold 1M`, `/threshold 250000`).', { parse_mode: 'Markdown' });
       }
 
       await Subscriber.findOneAndUpdate(
@@ -206,7 +252,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
         { upsert: true }
       );
 
-      return ctx.reply(`✅ *Threshold Updated!* You will now receive alerts for transactions of \`${formatCurrency(newThreshold)}\` and above.`, { parse_mode: 'Markdown' });
+      return ctx.reply(`✅ *Threshold Updated!* You will now receive alerts for transactions of \`${formatCompactUSD(newThreshold)}\` (${formatCurrency(newThreshold)}) and above.`, { parse_mode: 'Markdown' });
     } catch (err) {
       logger.error('Error handling /threshold:', err.message);
       ctx.reply('❌ Error updating threshold.');
@@ -265,7 +311,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
         { minThresholdUsd: amount, isActive: true },
         { upsert: true }
       );
-      await ctx.reply(`✅ *Alert Threshold Updated to:* \`${formatCurrency(amount)}\`\nTransactions above this amount will trigger instant notifications.`, {
+      await ctx.reply(`✅ *Alert Threshold Updated to:* \`${formatCompactUSD(amount)}\` (${formatCurrency(amount)})\nTransactions above this amount will trigger instant notifications.`, {
         parse_mode: 'Markdown'
       });
     } else if (data === 'test_usdt_mint') {
@@ -287,9 +333,6 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
     }
   });
 
-  // Start 1-minute alert queue dispatcher
-  startAlertDispatcher();
-
   return bot;
 }
 
@@ -308,7 +351,7 @@ async function sendStatusReply(ctx) {
     reply += `🪙 *Tokens Monitored:* USDT (Tether), USDC (Circle)\n`;
     
     if (lastEvent) {
-      reply += `\n🕒 *Last Event:* ${lastEvent.token} ${lastEvent.eventType} (\`${formatCurrency(lastEvent.amountFormatted)}\`) - \`${new Date(lastEvent.timestamp).toLocaleTimeString()}\``;
+      reply += `\n🕒 *Last Event:* ${lastEvent.token} ${lastEvent.eventType} (\`${formatCompactUSD(lastEvent.amountFormatted)}\`) - \`${new Date(lastEvent.timestamp).toLocaleTimeString()}\``;
     }
 
     await ctx.reply(reply, { parse_mode: 'Markdown' });
@@ -360,21 +403,21 @@ async function sendStatsReply(ctx) {
 
     let msg = `📈 *24-HOUR MINT & BURN SUMMARY*\n\n`;
     msg += `💵 *USDT (Tether):*\n`;
-    msg += `  🟢 Minted: \`${formatCurrency(usdtMint24)}\` (${usdtMintCount} txs)\n`;
-    msg += `  🔥 Burned: \`${formatCurrency(usdtBurn24)}\` (${usdtBurnCount} txs)\n`;
-    msg += `  📊 Net Change: \`${formatCurrency(usdtMint24 - usdtBurn24)}\`\n\n`;
+    msg += `  🟢 Minted: \`${formatCompactUSD(usdtMint24)}\` (${usdtMintCount} txs)\n`;
+    msg += `  🔥 Burned: \`${formatCompactUSD(usdtBurn24)}\` (${usdtBurnCount} txs)\n`;
+    msg += `  📊 Net Change: \`${formatCompactUSD(usdtMint24 - usdtBurn24)}\`\n\n`;
 
     msg += `🔵 *USDC (Circle):*\n`;
-    msg += `  🟢 Minted: \`${formatCurrency(usdcMint24)}\` (${usdcMintCount} txs)\n`;
-    msg += `  🔥 Burned: \`${formatCurrency(usdcBurn24)}\` (${usdcBurnCount} txs)\n`;
-    msg += `  📊 Net Change: \`${formatCurrency(usdcMint24 - usdcBurn24)}\`\n\n`;
+    msg += `  🟢 Minted: \`${formatCompactUSD(usdcMint24)}\` (${usdcMintCount} txs)\n`;
+    msg += `  🔥 Burned: \`${formatCompactUSD(usdcBurn24)}\` (${usdcBurnCount} txs)\n`;
+    msg += `  📊 Net Change: \`${formatCompactUSD(usdcMint24 - usdcBurn24)}\`\n\n`;
 
     const totalMinted = usdtMint24 + usdcMint24;
     const totalBurned = usdtBurn24 + usdcBurn24;
     msg += `🌐 *Total 24h Stablecoin Flow:*\n`;
-    msg += `➕ Minted: \`${formatCurrency(totalMinted)}\`\n`;
-    msg += `➖ Burned: \`${formatCurrency(totalBurned)}\`\n`;
-    msg += `🎯 Net Liquidity: \`${formatCurrency(totalMinted - totalBurned)}\``;
+    msg += `➕ Minted: \`${formatCompactUSD(totalMinted)}\`\n`;
+    msg += `➖ Burned: \`${formatCompactUSD(totalBurned)}\`\n`;
+    msg += `🎯 Net Liquidity: \`${formatCompactUSD(totalMinted - totalBurned)}\``;
 
     await ctx.reply(msg, { parse_mode: 'Markdown' });
   } catch (err) {
@@ -395,7 +438,7 @@ async function sendRecentReply(ctx) {
     recent.forEach((ev, idx) => {
       const icon = ev.eventType === 'MINT' ? '🟢' : '🔥';
       const timeStr = new Date(ev.timestamp).toISOString().replace('T', ' ').substring(0, 19);
-      msg += `${idx + 1}. ${icon} *${ev.token} ${ev.eventType}*: \`${formatCurrency(ev.amountFormatted)}\`\n`;
+      msg += `${idx + 1}. ${icon} *${ev.token} ${ev.eventType}*: \`${formatCompactUSD(ev.amountFormatted)}\` (${formatCurrency(ev.amountFormatted)})\n`;
       msg += `   ⏰ \`${timeStr} UTC\` | [Tx](${EXPLORER_BASE}/tx/${ev.txHash})\n\n`;
     });
 
@@ -409,14 +452,14 @@ async function sendThresholdMenuReply(ctx) {
   try {
     const chatId = ctx.chat.id.toString();
     const sub = await Subscriber.findOne({ chatId });
-    const current = sub ? formatCurrency(sub.minThresholdUsd) : '$100,000';
+    const current = sub ? formatCompactUSD(sub.minThresholdUsd) : '$100K';
 
     const text = 
 `⚙️ *ALERT THRESHOLD SETTINGS*
 
 Current Minimum: \`${current}\`
 
-Tap a button below to quickly set your notification threshold, or type your own amount (e.g. \`/threshold 250000\`):`;
+Tap a button below to quickly set your notification threshold, or type your own amount (e.g. \`/threshold 250k\` or \`/threshold 250000\`):`;
 
     await ctx.reply(text, {
       parse_mode: 'Markdown',
@@ -655,9 +698,39 @@ function handleSendError(sub, sendErr) {
   }
 }
 
-// Broadcast an event immediately or queue it
+// Broadcast an event immediately to all active subscribers meeting threshold
 export async function broadcastEvent(event) {
-  queueEventForBroadcast(event);
+  if (!bot) return;
+
+  try {
+    const activeSubscribers = await Subscriber.find({ isActive: true });
+    if (!activeSubscribers || !activeSubscribers.length) return;
+
+    for (const sub of activeSubscribers) {
+      const minThreshold = sub.minThresholdUsd !== undefined 
+        ? sub.minThresholdUsd 
+        : (Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000);
+
+      const isAllowedToken = !sub.tokens || sub.tokens.length === 0 || sub.tokens.includes(event.token);
+
+      if (event.amountFormatted >= minThreshold && isAllowedToken) {
+        const message = formatAlertMessage(event);
+        const keyboard = createAlertKeyboard(event);
+        try {
+          await bot.api.sendMessage(sub.chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
+            disable_web_page_preview: false
+          });
+          logger.info(`📢 Alert dispatched to @${sub.username || sub.chatId}: ${event.token} ${event.eventType} (${formatCompactUSD(event.amountFormatted)})`);
+        } catch (sendErr) {
+          handleSendError(sub, sendErr);
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Error during broadcastEvent:', err.message);
+  }
 }
 
 export function getBotInfo() {
