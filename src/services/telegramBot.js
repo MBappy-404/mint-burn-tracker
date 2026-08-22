@@ -287,6 +287,9 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
     }
   });
 
+  // Start 1-minute alert queue dispatcher
+  startAlertDispatcher();
+
   return bot;
 }
 
@@ -531,46 +534,130 @@ export async function sendTestAlert(chatId) {
   return sendCustomTestAlert(chatId, 'USDT_MINT');
 }
 
-// Broadcast an event to all eligible Telegram subscribers
-export async function broadcastEvent(event) {
-  if (!bot) return;
+// Broadcast queue for 1-minute batch dispatch
+let pendingAlertQueue = [];
+let dispatcherInterval = null;
+
+/**
+ * Queue an event to be dispatched in the 1-minute cycle
+ */
+export function queueEventForBroadcast(event) {
+  pendingAlertQueue.push(event);
+}
+
+/**
+ * Start the 1-minute batch alert dispatcher
+ */
+export function startAlertDispatcher() {
+  if (dispatcherInterval) return;
+
+  const intervalMs = Number(process.env.ALERT_INTERVAL_MS) || 60000; // Default 1 minute (60,000 ms)
+  logger.info(`⏰ 1-Minute Alert Dispatcher initialized (cycles every ${intervalMs / 1000}s). Only big amounts will trigger notifications.`);
+
+  dispatcherInterval = setInterval(async () => {
+    try {
+      await flushAlertQueue();
+    } catch (err) {
+      logger.error('Error in alert dispatcher cycle:', err.message);
+    }
+  }, intervalMs);
+}
+
+/**
+ * Flush and dispatch matching big events to subscribers
+ */
+export async function flushAlertQueue() {
+  if (!bot || pendingAlertQueue.length === 0) {
+    return;
+  }
+
+  // Drain pending queue
+  const eventsToProcess = pendingAlertQueue.splice(0, pendingAlertQueue.length);
+  logger.debug(`Processing 1-minute batch with ${eventsToProcess.length} event(s)...`);
 
   try {
-    const subscribers = await Subscriber.find({
-      isActive: true,
-      minThresholdUsd: { $lte: event.amountFormatted },
-      tokens: event.token
-    });
+    const activeSubscribers = await Subscriber.find({ isActive: true });
+    if (!activeSubscribers.length) return;
 
-    if (!subscribers.length) {
-      logger.info(`Event ${event.token} ${event.eventType} ($${event.amountFormatted.toLocaleString()}) filtered (no subscribers with matching threshold).`);
-      return;
-    }
+    for (const sub of activeSubscribers) {
+      const minThreshold = sub.minThresholdUsd !== undefined ? sub.minThresholdUsd : (Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000);
+      
+      // Filter big amount events that meet this subscriber's threshold and token preference
+      const matchingEvents = eventsToProcess.filter(ev => 
+        ev.amountFormatted >= minThreshold && 
+        (sub.tokens && sub.tokens.includes(ev.token))
+      );
 
-    const message = formatAlertMessage(event);
-    const keyboard = createAlertKeyboard(event);
+      if (matchingEvents.length === 0) {
+        // No big events for this user in this 1-minute window -> Stay quiet!
+        continue;
+      }
 
-    logger.info(`📢 Broadcasting ${event.token} ${event.eventType} ($${event.amountFormatted.toLocaleString()}) to ${subscribers.length} chat(s)...`);
+      // Sort matching events by amount descending (biggest first)
+      matchingEvents.sort((a, b) => b.amountFormatted - a.amountFormatted);
 
-    for (const sub of subscribers) {
-      try {
-        await bot.api.sendMessage(sub.chatId, message, {
-          parse_mode: 'Markdown',
-          reply_markup: keyboard,
-          disable_web_page_preview: false
-        });
-      } catch (sendErr) {
-        if (sendErr.error_code === 403 || sendErr.description?.includes('blocked') || sendErr.description?.includes('chat not found')) {
-          logger.warn(`Subscriber ${sub.chatId} blocked the bot or chat deleted. Deactivating...`);
-          await Subscriber.updateOne({ chatId: sub.chatId }, { isActive: false });
-        } else {
-          logger.error(`Failed to send alert to ${sub.chatId}:`, sendErr.message);
+      logger.info(`📢 Dispatching ${matchingEvents.length} big event(s) to @${sub.username || sub.chatId} (Threshold: $${minThreshold.toLocaleString()})`);
+
+      // If up to 3 events, send individual rich cards
+      if (matchingEvents.length <= 3) {
+        for (const event of matchingEvents) {
+          const message = formatAlertMessage(event);
+          const keyboard = createAlertKeyboard(event);
+          try {
+            await bot.api.sendMessage(sub.chatId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: keyboard,
+              disable_web_page_preview: false
+            });
+          } catch (sendErr) {
+            handleSendError(sub, sendErr);
+          }
+        }
+      } else {
+        // If more than 3 big events happened in this minute, send a consolidated bundle to avoid flooding
+        const topEvents = matchingEvents.slice(0, 3);
+        for (const event of topEvents) {
+          const message = formatAlertMessage(event);
+          const keyboard = createAlertKeyboard(event);
+          try {
+            await bot.api.sendMessage(sub.chatId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: keyboard,
+              disable_web_page_preview: false
+            });
+          } catch (sendErr) {
+            handleSendError(sub, sendErr);
+          }
+        }
+
+        const remainingCount = matchingEvents.length - 3;
+        const totalVolume = matchingEvents.reduce((acc, curr) => acc + curr.amountFormatted, 0);
+        const summaryMsg = `⚡ *+${remainingCount} more major transactions* in this 1-minute window!\n💰 *Total 1-Min Batch Volume:* \`${formatCurrency(totalVolume)}\`\n👉 Check live dashboard for full breakdown.`;
+        
+        try {
+          await bot.api.sendMessage(sub.chatId, summaryMsg, { parse_mode: 'Markdown' });
+        } catch (sendErr) {
+          handleSendError(sub, sendErr);
         }
       }
     }
   } catch (err) {
-    logger.error('Error during broadcastEvent:', err.message);
+    logger.error('Error during batch broadcast:', err.message);
   }
+}
+
+function handleSendError(sub, sendErr) {
+  if (sendErr.error_code === 403 || sendErr.description?.includes('blocked') || sendErr.description?.includes('chat not found')) {
+    logger.warn(`Subscriber ${sub.chatId} blocked bot. Deactivating...`);
+    Subscriber.updateOne({ chatId: sub.chatId }, { isActive: false }).exec();
+  } else {
+    logger.error(`Failed to send alert to ${sub.chatId}:`, sendErr.message);
+  }
+}
+
+// Broadcast an event immediately or queue it
+export async function broadcastEvent(event) {
+  queueEventForBroadcast(event);
 }
 
 export function getBotInfo() {
