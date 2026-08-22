@@ -24,15 +24,15 @@ export function broadcastToWeb(event) {
   }
 }
 
-// In-memory processing lock to prevent race conditions between WebSocket and Poller
+// In-memory processing lock to prevent duplicate processing
 const processingLocks = new Set();
 
 /**
- * Process a detected Mint or Burn event:
- * 1. Normalize data and calculate numeric amounts
- * 2. Save uniquely in MongoDB
- * 3. Broadcast to Telegram Subscribers
- * 4. Push live to Web Dashboard
+ * Process a detected USDT or USDC Native Mint or Burn event:
+ * 1. Calculate amount & USD value
+ * 2. Filter strictly >= $100 Million USD ($100,000,000)
+ * 3. Save in MongoDB
+ * 4. Broadcast to Telegram & Web
  */
 export async function processMintBurnEvent({
   txHash,
@@ -51,7 +51,6 @@ export async function processMintBurnEvent({
     return null;
   }
   processingLocks.add(lockKey);
-  // Remove lock after 30 seconds
   setTimeout(() => processingLocks.delete(lockKey), 30000);
 
   try {
@@ -65,14 +64,14 @@ export async function processMintBurnEvent({
     const amountBigInt = BigInt(rawAmount.toString());
     const divisor = 10n ** BigInt(decimals);
     
-    // Exact floating-point amount representation
     const wholePart = amountBigInt / divisor;
     const remainder = amountBigInt % divisor;
     const amountFormatted = Number(wholePart) + (Number(remainder) / (10 ** decimals));
+    const valueUsd = amountFormatted; // 1 USDT = $1, 1 USDC = $1
 
-    // STRICT REAL DATA FILTER: Discard 0 USD, sub-cent dust, and micro-routing transactions (< $10,000 USD)
-    const minStorageUsd = Number(process.env.MIN_RECORD_USD) || 10000;
-    if (amountFormatted < minStorageUsd || isNaN(amountFormatted) || amountFormatted <= 0) {
+    // STRICT USER REQUIREMENT: Only transactions >= $100,000,000 USD
+    const minThreshold = Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100_000_000;
+    if (valueUsd < minThreshold || isNaN(valueUsd) || valueUsd <= 0) {
       return null;
     }
 
@@ -88,10 +87,12 @@ export async function processMintBurnEvent({
       eventType,
       amount: rawAmount.toString(),
       amountFormatted,
+      valueUsd,
       from: from.toLowerCase(),
       to: to.toLowerCase(),
       fromLabel,
       toLabel,
+      exchangeName: '',
       network,
       explorerUrl: `https://etherscan.io/tx/${txHash}`
     };
@@ -107,7 +108,7 @@ export async function processMintBurnEvent({
 
     logger.event(
       eventType,
-      `${tokenSymbol} ${eventType}: $${amountFormatted.toLocaleString()} | Block #${blockNumber} | Tx: ${txHash.substring(0, 10)}...`
+      `🚨 ${tokenSymbol} ${eventType}: $${amountFormatted.toLocaleString()} | Block #${blockNumber} | Tx: ${txHash.substring(0, 10)}...`
     );
 
     // Broadcast to Telegram channels & subscribers
@@ -119,10 +120,93 @@ export async function processMintBurnEvent({
     return savedEvent;
   } catch (err) {
     if (err.code === 11000) {
-      // Duplicate key error - safe to ignore
       return null;
     }
-    logger.error('Error processing mint/burn event:', err);
+    logger.error('Error processing mint/burn event:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Process a detected BTC or ETH Whale Transaction (Wallet <-> Exchange)
+ */
+export async function processWhaleTransaction({
+  txHash,
+  logIndex = 0,
+  blockNumber,
+  timestamp = new Date(),
+  tokenSymbol,
+  eventType,
+  cryptoAmount,
+  valueUsd,
+  from,
+  to,
+  fromLabel,
+  toLabel,
+  exchangeName,
+  network = 'Ethereum'
+}) {
+  const lockKey = `${txHash}_${logIndex}`;
+  if (processingLocks.has(lockKey)) {
+    return null;
+  }
+  processingLocks.add(lockKey);
+  setTimeout(() => processingLocks.delete(lockKey), 30000);
+
+  try {
+    // STRICT USER REQUIREMENT: Only transactions >= $100,000,000 USD
+    const minThreshold = Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100_000_000;
+    if (valueUsd < minThreshold || isNaN(valueUsd) || valueUsd <= 0) {
+      return null;
+    }
+
+    const explorerUrl = network === 'Bitcoin' 
+      ? `https://mempool.space/tx/${txHash}`
+      : `https://etherscan.io/tx/${txHash}`;
+
+    const eventDoc = {
+      txHash,
+      logIndex,
+      blockNumber,
+      timestamp,
+      token: tokenSymbol,
+      eventType,
+      amount: cryptoAmount.toString(),
+      amountFormatted: cryptoAmount,
+      valueUsd,
+      from: from.toLowerCase ? from.toLowerCase() : from,
+      to: to.toLowerCase ? to.toLowerCase() : to,
+      fromLabel,
+      toLabel,
+      exchangeName: exchangeName || '',
+      network,
+      explorerUrl
+    };
+
+    const existing = await Event.findOne({ txHash, logIndex });
+    if (existing) {
+      return existing;
+    }
+
+    const savedEvent = await Event.create(eventDoc);
+
+    logger.event(
+      eventType,
+      `🚨 ${tokenSymbol} ${eventType}: ${cryptoAmount.toLocaleString()} ${tokenSymbol} ($${Math.round(valueUsd).toLocaleString()}) | ${exchangeName} | Block #${blockNumber}`
+    );
+
+    // Broadcast to Telegram subscribers
+    await broadcastEvent(savedEvent);
+
+    // Broadcast to Web SSE
+    broadcastToWeb(savedEvent);
+
+    return savedEvent;
+  } catch (err) {
+    if (err.code === 11000) {
+      return null;
+    }
+    logger.error('Error processing whale transaction:', err.message);
     return null;
   }
 }

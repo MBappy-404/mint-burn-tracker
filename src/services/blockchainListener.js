@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { TOKENS, CONTRACT_ABIS, ZERO_ADDRESS } from '../config/constants.js';
+import { TOKENS, CONTRACT_ABIS, EVENT_TOPICS, ZERO_ADDRESS } from '../config/constants.js';
 import { logger } from '../config/logger.js';
 import { processMintBurnEvent } from './eventProcessor.js';
 
@@ -19,7 +19,6 @@ async function getBlockTimestamp(provider, blockNumber) {
     if (block && block.timestamp) {
       const date = new Date(block.timestamp * 1000);
       blockTimestampCache.set(blockNumber, date);
-      // Keep cache small
       if (blockTimestampCache.size > 200) {
         const firstKey = blockTimestampCache.keys().next().value;
         blockTimestampCache.delete(firstKey);
@@ -33,14 +32,21 @@ async function getBlockTimestamp(provider, blockNumber) {
 }
 
 /**
- * Handle USDT Contract Events (Tether)
+ * Handle Native USDT Contract Events (Tether Official Issue & Redeem ONLY)
+ * NO Transfer listener = 0 spam, 0 wasted API traffic!
  */
 function setupUsdtListeners(contract, provider) {
-  logger.info('📡 Attaching listeners for USDT (Tether)...');
+  logger.info('📡 Attaching listeners for USDT (Tether Official Mint/Burn Only)...');
 
   // 1. Issue(uint amount) - Tether Official Mint
   contract.on('Issue', async (amount, eventPayload) => {
     try {
+      const amountBigInt = BigInt(amount.toString());
+      // Quick filter: 100M USDT (with 6 decimals) = 100,000,000,000,000
+      if (amountBigInt < 100_000_000_000_000n) {
+        return; // Discard immediately without making extra calls
+      }
+
       const log = eventPayload.log || eventPayload;
       const timestamp = await getBlockTimestamp(provider, log.blockNumber);
       await processMintBurnEvent({
@@ -63,6 +69,12 @@ function setupUsdtListeners(contract, provider) {
   // 2. Redeem(uint amount) - Tether Official Burn
   contract.on('Redeem', async (amount, eventPayload) => {
     try {
+      const amountBigInt = BigInt(amount.toString());
+      // Quick filter: 100M USDT = 100,000,000,000,000
+      if (amountBigInt < 100_000_000_000_000n) {
+        return;
+      }
+
       const log = eventPayload.log || eventPayload;
       const timestamp = await getBlockTimestamp(provider, log.blockNumber);
       await processMintBurnEvent({
@@ -81,65 +93,24 @@ function setupUsdtListeners(contract, provider) {
       logger.error('Error handling USDT Redeem event:', err.message);
     }
   });
-
-  // 3. Significant Treasury & Whale Movements (>= $100k or >= $5M)
-  contract.on('Transfer', async (from, to, value, eventPayload) => {
-    try {
-      const log = eventPayload.log || eventPayload;
-      const fromLower = (from || '').toLowerCase();
-      const toLower = (to || '').toLowerCase();
-      if (!fromLower || !toLower || fromLower === ZERO_ADDRESS || toLower === ZERO_ADDRESS) return;
-
-      const TETHER_TREASURY_1 = '0x5754284f345afc66a98fbb0a0afe71e0f007b949';
-      const TETHER_TREASURY_2 = '0xc6cde7c39eb2f0f0095f41570af89efc2c1ea86e';
-      const isTreasury = fromLower === TETHER_TREASURY_1 || fromLower === TETHER_TREASURY_2 || toLower === TETHER_TREASURY_1 || toLower === TETHER_TREASURY_2;
-
-      const valueBigInt = BigInt(value.toString());
-
-      if (isTreasury && valueBigInt >= 100000000000n) { // >= $100,000 USDT
-        const timestamp = await getBlockTimestamp(provider, log.blockNumber);
-        await processMintBurnEvent({
-          txHash: log.transactionHash,
-          logIndex: log.index ?? 0,
-          blockNumber: log.blockNumber,
-          timestamp,
-          tokenSymbol: 'USDT',
-          eventType: 'TREASURY_TRANSFER',
-          rawAmount: value.toString(),
-          from: fromLower,
-          to: toLower,
-          network: 'Ethereum'
-        });
-      } else if (valueBigInt >= 5000000000000n) { // >= $5,000,000 USDT Whale
-        const timestamp = await getBlockTimestamp(provider, log.blockNumber);
-        await processMintBurnEvent({
-          txHash: log.transactionHash,
-          logIndex: log.index ?? 0,
-          blockNumber: log.blockNumber,
-          timestamp,
-          tokenSymbol: 'USDT',
-          eventType: 'WHALE_TRANSFER',
-          rawAmount: value.toString(),
-          from: fromLower,
-          to: toLower,
-          network: 'Ethereum'
-        });
-      }
-    } catch (err) {
-      logger.error('Error handling USDT Transfer event:', err.message);
-    }
-  });
 }
 
 /**
- * Handle USDC Contract Events (Circle)
+ * Handle Native USDC Contract Events (Circle Official Mint & Burn ONLY)
+ * NO Transfer listener = 0 spam, 0 wasted API traffic!
  */
 function setupUsdcListeners(contract, provider) {
-  logger.info('📡 Attaching listeners for USDC (Circle)...');
+  logger.info('📡 Attaching listeners for USDC (Circle Official Mint/Burn Only)...');
 
-  // 1. Mint(address indexed minter, address indexed to, uint256 amount) - Circle Official Mint
+  // 1. Mint(address minter, address to, uint256 amount) - Circle Official Mint
   contract.on('Mint', async (minter, to, amount, eventPayload) => {
     try {
+      const amountBigInt = BigInt(amount.toString());
+      // Quick filter: 100M USDC = 100,000,000,000,000
+      if (amountBigInt < 100_000_000_000_000n) {
+        return;
+      }
+
       const log = eventPayload.log || eventPayload;
       const timestamp = await getBlockTimestamp(provider, log.blockNumber);
       await processMintBurnEvent({
@@ -159,9 +130,15 @@ function setupUsdcListeners(contract, provider) {
     }
   });
 
-  // 2. Burn(address indexed burner, uint256 amount) - Circle Official Burn
+  // 2. Burn(address burner, uint256 amount) - Circle Official Burn
   contract.on('Burn', async (burner, amount, eventPayload) => {
     try {
+      const amountBigInt = BigInt(amount.toString());
+      // Quick filter: 100M USDC = 100,000,000,000,000
+      if (amountBigInt < 100_000_000_000_000n) {
+        return;
+      }
+
       const log = eventPayload.log || eventPayload;
       const timestamp = await getBlockTimestamp(provider, log.blockNumber);
       await processMintBurnEvent({
@@ -180,63 +157,17 @@ function setupUsdcListeners(contract, provider) {
       logger.error('Error handling USDC Burn event:', err.message);
     }
   });
-
-  // 3. Significant Treasury & Whale movements (>= $100k or >= $5M)
-  contract.on('Transfer', async (from, to, value, eventPayload) => {
-    try {
-      const log = eventPayload.log || eventPayload;
-      const fromLower = (from || '').toLowerCase();
-      const toLower = (to || '').toLowerCase();
-      if (!fromLower || !toLower || fromLower === ZERO_ADDRESS || toLower === ZERO_ADDRESS) return;
-
-      const CIRCLE_MINTER = '0x55fe002a30f5c73e9504b7b72ed222a00461b018';
-      const isCircleTreasury = fromLower === CIRCLE_MINTER || toLower === CIRCLE_MINTER;
-      const valueBigInt = BigInt(value.toString());
-
-      if (isCircleTreasury && valueBigInt >= 100000000000n) { // >= $100,000 USDC
-        const timestamp = await getBlockTimestamp(provider, log.blockNumber);
-        await processMintBurnEvent({
-          txHash: log.transactionHash,
-          logIndex: log.index ?? 0,
-          blockNumber: log.blockNumber,
-          timestamp,
-          tokenSymbol: 'USDC',
-          eventType: 'TREASURY_TRANSFER',
-          rawAmount: value.toString(),
-          from: fromLower,
-          to: toLower,
-          network: 'Ethereum'
-        });
-      } else if (valueBigInt >= 5000000000000n) { // >= $5,000,000 USDC Whale
-        const timestamp = await getBlockTimestamp(provider, log.blockNumber);
-        await processMintBurnEvent({
-          txHash: log.transactionHash,
-          logIndex: log.index ?? 0,
-          blockNumber: log.blockNumber,
-          timestamp,
-          tokenSymbol: 'USDC',
-          eventType: 'WHALE_TRANSFER',
-          rawAmount: value.toString(),
-          from: fromLower,
-          to: toLower,
-          network: 'Ethereum'
-        });
-      }
-    } catch (err) {
-      logger.error('Error handling USDC Transfer event:', err.message);
-    }
-  });
 }
 
 /**
- * Initialize Fallback Poller for Ethereum Blocks
+ * Initialize Fallback Poller with Strict Topic Filtering (Ultra Low Overhead)
  */
 async function startFallbackPoller() {
   if (isPollingActive) return;
   isPollingActive = true;
 
-  const pollInterval = Number(process.env.POLL_INTERVAL_MS) || 12000;
-  logger.info(`🔄 Fallback block scanner active (Checking every ${pollInterval / 1000}s)...`);
+  const pollInterval = Number(process.env.POLL_INTERVAL_MS) || 15000;
+  logger.info(`🔄 Optimized block scanner active (Checking every ${pollInterval / 1000}s with on-chain topic filter)...`);
 
   const poll = async () => {
     try {
@@ -251,22 +182,22 @@ async function startFallbackPoller() {
         const fromBlock = lastProcessedBlock + 1;
         const toBlock = currentBlock;
 
-        logger.debug(`🔍 Scanning blocks ${fromBlock} to ${toBlock} for events...`);
-
-        // Check USDT logs
+        // Check USDT logs with strict Issue/Redeem topic filter
         await checkTokenLogs(
           TOKENS.USDT.address,
           CONTRACT_ABIS.USDT,
           'USDT',
+          [EVENT_TOPICS.USDT_ISSUE, EVENT_TOPICS.USDT_REDEEM],
           fromBlock,
           toBlock
         );
 
-        // Check USDC logs
+        // Check USDC logs with strict Mint/Burn topic filter
         await checkTokenLogs(
           TOKENS.USDC.address,
           CONTRACT_ABIS.USDC,
           'USDC',
+          [EVENT_TOPICS.USDC_MINT, EVENT_TOPICS.USDC_BURN],
           fromBlock,
           toBlock
         );
@@ -284,18 +215,19 @@ async function startFallbackPoller() {
 }
 
 /**
- * Query historical or missed logs for a specific token contract with <= 10 block chunking
+ * Query logs with strict server-side topic filtering
  */
-export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, toBlock) {
+export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromBlock, toBlock) {
   try {
     const iface = new ethers.Interface(abi);
-    const MAX_CHUNK = 10; // Alchemy Free Tier maximum range
+    const MAX_CHUNK = 50; // Safe chunk size when topic-filtered
 
     for (let start = fromBlock; start <= toBlock; start += MAX_CHUNK) {
       const end = Math.min(start + MAX_CHUNK - 1, toBlock);
 
       const logs = await httpProvider.getLogs({
         address: contractAddress,
+        topics: [topics], // Server-side filter: Alchemy returns [] if no mint/burn in range
         fromBlock: start,
         toBlock: end
       });
@@ -305,9 +237,10 @@ export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, to
           const parsed = iface.parseLog(log);
           if (!parsed) continue;
 
-          const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
-
           if (parsed.name === 'Issue') {
+            const rawAmount = parsed.args[0].toString();
+            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
+            const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
               logIndex: log.index ?? 0,
@@ -315,12 +248,15 @@ export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, to
               timestamp,
               tokenSymbol: symbol,
               eventType: 'MINT',
-              rawAmount: parsed.args[0].toString(),
+              rawAmount,
               from: ZERO_ADDRESS,
               to: '0x5754284f345afc66a98fbb0a0afe71e0f007b949',
               network: 'Ethereum'
             });
           } else if (parsed.name === 'Redeem') {
+            const rawAmount = parsed.args[0].toString();
+            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
+            const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
               logIndex: log.index ?? 0,
@@ -328,12 +264,15 @@ export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, to
               timestamp,
               tokenSymbol: symbol,
               eventType: 'BURN',
-              rawAmount: parsed.args[0].toString(),
+              rawAmount,
               from: '0x5754284f345afc66a98fbb0a0afe71e0f007b949',
               to: ZERO_ADDRESS,
               network: 'Ethereum'
             });
           } else if (parsed.name === 'Mint') {
+            const rawAmount = (parsed.args.amount || parsed.args[2]).toString();
+            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
+            const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
               logIndex: log.index ?? 0,
@@ -341,12 +280,15 @@ export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, to
               timestamp,
               tokenSymbol: symbol,
               eventType: 'MINT',
-              rawAmount: (parsed.args.amount || parsed.args[2]).toString(),
+              rawAmount,
               from: (parsed.args.minter || parsed.args[0] || ZERO_ADDRESS).toLowerCase(),
               to: (parsed.args.to || parsed.args[1] || '').toLowerCase(),
               network: 'Ethereum'
             });
           } else if (parsed.name === 'Burn') {
+            const rawAmount = (parsed.args.amount || parsed.args[1]).toString();
+            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
+            const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
               logIndex: log.index ?? 0,
@@ -354,7 +296,7 @@ export async function checkTokenLogs(contractAddress, abi, symbol, fromBlock, to
               timestamp,
               tokenSymbol: symbol,
               eventType: 'BURN',
-              rawAmount: (parsed.args.amount || parsed.args[1]).toString(),
+              rawAmount,
               from: (parsed.args.burner || parsed.args[0] || '').toLowerCase(),
               to: ZERO_ADDRESS,
               network: 'Ethereum'
@@ -397,6 +339,7 @@ export async function initBlockchainListener() {
       const usdtContract = new ethers.Contract(TOKENS.USDT.address, CONTRACT_ABIS.USDT, wsProvider);
       const usdcContract = new ethers.Contract(TOKENS.USDC.address, CONTRACT_ABIS.USDC, wsProvider);
 
+      // Listen ONLY to native Mint & Burn events
       setupUsdtListeners(usdtContract, wsProvider);
       setupUsdcListeners(usdcContract, wsProvider);
 
@@ -409,13 +352,13 @@ export async function initBlockchainListener() {
         logger.error(' Alchemy WebSocket error:', err.message);
       });
 
-      logger.info('⚡ Alchemy WebSocket stream active and subscribed!');
+      logger.info('⚡ Alchemy WebSocket stream active for Native USDT & USDC Mints/Burns!');
     } catch (wsErr) {
       logger.warn(' WebSocket initialization warning (Fallback poller will handle events):', wsErr.message);
     }
   }
 
-  // 3. Start Fallback Poller to guarantee zero missed blocks
+  // 3. Start Fallback Poller with server-side topic filtering
   startFallbackPoller();
 
   return { httpProvider, wsProvider };

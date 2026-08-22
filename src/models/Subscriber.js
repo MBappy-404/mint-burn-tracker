@@ -23,11 +23,11 @@ const subscriberSchema = new mongoose.Schema(
     },
     minThresholdUsd: {
       type: Number,
-      default: Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000
+      default: Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000000
     },
     tokens: {
       type: [String],
-      default: ['USDT', 'USDC']
+      default: ['BTC', 'ETH', 'USDT', 'USDC']
     },
     isActive: {
       type: Boolean,

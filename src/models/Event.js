@@ -24,21 +24,26 @@ const eventSchema = new mongoose.Schema(
     token: {
       type: String,
       required: true,
-      enum: ['USDT', 'USDC'],
+      enum: ['USDT', 'USDC', 'BTC', 'ETH'],
       index: true
     },
     eventType: {
       type: String,
       required: true,
-      enum: ['MINT', 'BURN', 'TREASURY_TRANSFER', 'WHALE_TRANSFER'],
+      enum: ['MINT', 'BURN', 'WALLET_TO_EXCHANGE', 'EXCHANGE_TO_WALLET', 'TREASURY_TRANSFER', 'WHALE_TRANSFER'],
       index: true
     },
     amount: {
-      type: String, // String representation of raw BigInt to prevent precision loss
+      type: String, // String representation of raw BigInt/Units to prevent precision loss
       required: true
     },
     amountFormatted: {
-      type: Number, // Decimals-adjusted numeric value (e.g. 250000000) for range queries and aggregations
+      type: Number, // Decimals-adjusted token numeric value
+      required: true,
+      index: true
+    },
+    valueUsd: {
+      type: Number, // USD valuation (e.g. 150000000) for strict >= $100M queries
       required: true,
       index: true
     },
@@ -55,6 +60,10 @@ const eventSchema = new mongoose.Schema(
       default: ''
     },
     toLabel: {
+      type: String,
+      default: ''
+    },
+    exchangeName: {
       type: String,
       default: ''
     },

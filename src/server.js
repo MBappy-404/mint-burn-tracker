@@ -8,13 +8,14 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { connectDatabase, isDbConnected } from './services/db.js';
-import { initTelegramBot, getBotInfo, sendTestAlert } from './services/telegramBot.js';
-import { initBlockchainListener, getListenerStatus, checkTokenLogs } from './services/blockchainListener.js';
+import { initTelegramBot, getBotInfo, sendTestAlert, sendCustomTestAlert } from './services/telegramBot.js';
+import { initBlockchainListener, getListenerStatus } from './services/blockchainListener.js';
+import { initPriceService, getTokenPriceUsd } from './services/priceService.js';
+import { initExchangeTracker } from './services/exchangeTracker.js';
 import { Event } from './models/Event.js';
 import { Subscriber } from './models/Subscriber.js';
 import { registerWebClient, broadcastToWeb } from './services/eventProcessor.js';
 import { logger } from './config/logger.js';
-import { TOKENS, CONTRACT_ABIS } from './config/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,9 +46,14 @@ app.get('/api/status', async (req, res) => {
         activeSubscribers: subscriberCount
       },
       blockchain: {
-        network: 'Ethereum Mainnet',
+        networks: ['Ethereum Mainnet', 'Bitcoin Mainnet'],
         ...listenerStatus
       },
+      prices: {
+        BTC: getTokenPriceUsd('BTC'),
+        ETH: getTokenPriceUsd('ETH')
+      },
+      minThresholdUsd: Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100_000_000,
       totalEventsRecorded: totalEvents,
       uptimeSeconds: Math.floor(process.uptime()),
       timestamp: new Date().toISOString()
@@ -57,16 +63,16 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-// 2. Events List with Filters
+// 2. Events List with Filters (BTC, ETH, USDT, USDC)
 app.get('/api/events', async (req, res) => {
   try {
-    const limit = Math.min(Number(req.query.limit) || 25, 100);
-    const token = req.query.token; // 'USDT' or 'USDC'
-    const type = req.query.type; // 'MINT' or 'BURN'
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const token = req.query.token; // 'BTC', 'ETH', 'USDT', 'USDC'
+    const type = req.query.type; // 'MINT', 'BURN', 'WALLET_TO_EXCHANGE', 'EXCHANGE_TO_WALLET'
 
     const filter = {};
-    if (token) filter.token = token.toUpperCase();
-    if (type) filter.eventType = type.toUpperCase();
+    if (token && token !== 'ALL') filter.token = token.toUpperCase();
+    if (type && type !== 'ALL') filter.eventType = type.toUpperCase();
 
     const events = await Event.find(filter)
       .sort({ timestamp: -1, _id: -1 })
@@ -78,12 +84,11 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-// 3. Analytics & Volume Stats Endpoint
+// 3. Analytics & Volume Stats Endpoint (>= $100M)
 app.get('/api/stats', async (req, res) => {
   try {
     const now = new Date();
     const past24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const past7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     const [stats24h, statsAllTime] = await Promise.all([
       Event.aggregate([
@@ -91,6 +96,7 @@ app.get('/api/stats', async (req, res) => {
         {
           $group: {
             _id: { token: '$token', eventType: '$eventType' },
+            totalUsd: { $sum: '$valueUsd' },
             totalAmount: { $sum: '$amountFormatted' },
             count: { $sum: 1 }
           }
@@ -100,6 +106,7 @@ app.get('/api/stats', async (req, res) => {
         {
           $group: {
             _id: { token: '$token', eventType: '$eventType' },
+            totalUsd: { $sum: '$valueUsd' },
             totalAmount: { $sum: '$amountFormatted' },
             count: { $sum: 1 }
           }
@@ -110,18 +117,27 @@ app.get('/api/stats', async (req, res) => {
     const formatGroup = (agg) => {
       const result = {
         USDT: { mint: 0, burn: 0, mintCount: 0, burnCount: 0 },
-        USDC: { mint: 0, burn: 0, mintCount: 0, burnCount: 0 }
+        USDC: { mint: 0, burn: 0, mintCount: 0, burnCount: 0 },
+        BTC: { inflow: 0, outflow: 0, inflowCount: 0, outflowCount: 0 },
+        ETH: { inflow: 0, outflow: 0, inflowCount: 0, outflowCount: 0 }
       };
+
       agg.forEach((item) => {
         const token = item._id.token;
         const type = item._id.eventType;
         if (result[token]) {
           if (type === 'MINT') {
-            result[token].mint = item.totalAmount;
+            result[token].mint = item.totalUsd || item.totalAmount;
             result[token].mintCount = item.count;
-          } else {
-            result[token].burn = item.totalAmount;
+          } else if (type === 'BURN') {
+            result[token].burn = item.totalUsd || item.totalAmount;
             result[token].burnCount = item.count;
+          } else if (type === 'WALLET_TO_EXCHANGE') {
+            result[token].inflow = item.totalUsd;
+            result[token].inflowCount = item.count;
+          } else if (type === 'EXCHANGE_TO_WALLET') {
+            result[token].outflow = item.totalUsd;
+            result[token].outflowCount = item.count;
           }
         }
       });
@@ -154,42 +170,22 @@ app.get('/api/stream', (req, res) => {
 // 5. Test Alert Trigger
 app.post('/api/test-alert', async (req, res) => {
   try {
+    const type = req.body?.type || 'USDT_MINT';
     const subscriber = await Subscriber.findOne({ isActive: true });
-    const testData = await sendTestAlert(subscriber?.chatId);
+    const testData = await sendCustomTestAlert(subscriber?.chatId, type);
 
     res.json({
       success: true,
-      message: 'Test alert dispatched to Telegram subscriber!',
-      sentToChatId: subscriber?.chatId || 'None (No active subscriber yet)'
+      message: `Test alert (${type}) dispatched!`,
+      sentToChatId: subscriber?.chatId || 'None (No active subscriber yet)',
+      event: testData
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// 6. Backfill recent blocks on demand
-app.post('/api/backfill', async (req, res) => {
-  try {
-    const blocks = Math.min(Number(req.body.blocks) || 200, 1000);
-    const { httpProvider } = await initBlockchainListener();
-    const currentBlock = await httpProvider.getBlockNumber();
-    const fromBlock = currentBlock - blocks;
-
-    logger.info(`🔄 Manual backfill requested: scanning last ${blocks} blocks (${fromBlock} -> ${currentBlock})...`);
-
-    await Promise.all([
-      checkTokenLogs(TOKENS.USDT.address, CONTRACT_ABIS.USDT, 'USDT', fromBlock, currentBlock),
-      checkTokenLogs(TOKENS.USDC.address, CONTRACT_ABIS.USDC, 'USDC', fromBlock, currentBlock)
-    ]);
-
-    const count = await Event.countDocuments({ blockNumber: { $gte: fromBlock } });
-    res.json({ success: true, fromBlock, toBlock: currentBlock, eventsFound: count });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 7. Data Cleanup / Deletion Endpoint
+// 6. Data Cleanup / Deletion Endpoint
 app.post('/api/events/delete', async (req, res) => {
   try {
     const { mode, fromDate, toDate, olderThanDays, hours } = req.body;
@@ -236,50 +232,29 @@ app.post('/api/events/delete', async (req, res) => {
   }
 });
 
-// Keep-alive heartbeat for Render Free Tier (pings every 10 minutes to prevent sleep)
-function startKeepAliveHeartbeat() {
-  const appUrl = process.env.RENDER_EXTERNAL_URL || process.env.APP_URL;
-  if (!appUrl) {
-    logger.info('💡 Tip: Add your Render URL to UptimeRobot (https://uptimerobot.com) to keep Render awake 24/7 for free.');
-    return;
-  }
-
-  const pingInterval = 10 * 60 * 1000; // 10 minutes (before Render 15m timeout)
-  const pingUrl = `${appUrl.replace(/\/$/, '')}/api/status`;
-  logger.info(`💓 Keep-alive heartbeat enabled: Pinging ${pingUrl} every 10m to prevent Render sleep.`);
-
-  setInterval(async () => {
-    try {
-      const res = await fetch(pingUrl);
-      if (res.ok) {
-        logger.debug('💓 Keep-alive self-ping successful');
-      }
-    } catch (e) {
-      logger.debug('💓 Keep-alive self-ping error:', e.message);
-    }
-  }, pingInterval);
-}
-
 // Start Server & Services
 async function bootstrap() {
   try {
     console.log('\n=========================================');
-    console.log('   👑 MINT FATHER BOT - STARTING UP   ');
+    console.log('   👑 MINT FATHER SENTINEL (≥$100M)   ');
     console.log('=========================================\n');
 
     // 1. Connect MongoDB
     await connectDatabase();
 
-    // 2. Start Telegram Bot
+    // 2. Start Price Service (BTC & ETH 60s ticker)
+    initPriceService();
+
+    // 3. Start Telegram Bot
     await initTelegramBot();
 
-    // 3. Start Blockchain Listener
-    await initBlockchainListener();
+    // 4. Start Native USDT & USDC Blockchain Listener
+    const { httpProvider } = await initBlockchainListener();
 
-    // 4. Start Keep-Alive Heartbeat
-    startKeepAliveHeartbeat();
+    // 5. Start BTC & ETH Whale Exchange Tracker
+    initExchangeTracker(httpProvider);
 
-    // 5. Start Web API Server
+    // 6. Start Web API Server
     app.listen(PORT, () => {
       logger.info(`🌐 Web Dashboard & API Server live at: http://localhost:${PORT}`);
       logger.info(`🤖 Telegram Bot is ready for commands (@MintFatherBot)`);

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mint Father | Real-time USDT & USDC Mint/Burn Monitor</title>
-  <meta name="description" content="Live Ethereum USDT & USDC Mint and Burn tracking dashboard with Telegram bot alerts and real-time on-chain analytics.">
+  <title>Mint Father | ≥$100M Whale & Stablecoin Sentinel</title>
+  <meta name="description" content="Live Ethereum & Bitcoin ≥$100M Whale Movements, Exchange Inflow/Outflows, and USDT & USDC Native Mint/Burn Sentinel with Telegram Bot Alerts.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -24,19 +24,19 @@
         <div class="logo-badge">👑</div>
         <div class="brand-text">
           <h1>MINT FATHER</h1>
-          <span class="sub-brand">Ethereum Stablecoin Mint & Burn Sentinel</span>
+          <span class="sub-brand">≥$100M Whale & Stablecoin Sentinel</span>
         </div>
       </div>
       <div class="header-actions">
         <div class="status-indicator-pill">
           <span class="pulse-dot"></span>
-          <span id="bot-status-text">LISTENING ON-CHAIN</span>
+          <span id="bot-status-text">SENTINEL ACTIVE (≥$100M)</span>
         </div>
         <button id="btn-open-cleanup-modal" class="btn btn-danger-outline" title="Manage database storage and delete old records">
           🗑️ Cleanup DB
         </button>
         <button id="btn-test-alert" class="btn btn-secondary">
-          🧪 Trigger Test Alert
+          🧪 Test Alert
         </button>
         <a href="https://t.me/MintFatherBot" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="tg-link-btn">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .37z"/></svg>
@@ -49,38 +49,38 @@
     <section class="stats-grid">
       <div class="stat-card card-glow-green">
         <div class="card-header">
-          <span class="card-icon">🟢</span>
-          <span class="card-label">24H USDT MINTED</span>
+          <span class="card-icon">💵</span>
+          <span class="card-label">24H USDT MINT/BURN</span>
         </div>
-        <div class="card-value" id="stat-usdt-mint">$0</div>
-        <div class="card-sub" id="stat-usdt-mint-count">0 transactions</div>
-      </div>
-
-      <div class="stat-card card-glow-red">
-        <div class="card-header">
-          <span class="card-icon">🔥</span>
-          <span class="card-label">24H USDT BURNED</span>
-        </div>
-        <div class="card-value" id="stat-usdt-burn">$0</div>
-        <div class="card-sub" id="stat-usdt-burn-count">0 transactions</div>
+        <div class="card-value" id="stat-usdt-total">$0</div>
+        <div class="card-sub" id="stat-usdt-sub">0 transactions (≥$100M)</div>
       </div>
 
       <div class="stat-card card-glow-blue">
         <div class="card-header">
           <span class="card-icon">🔵</span>
-          <span class="card-label">24H USDC MINTED</span>
+          <span class="card-label">24H USDC MINT/BURN</span>
         </div>
-        <div class="card-value" id="stat-usdc-mint">$0</div>
-        <div class="card-sub" id="stat-usdc-mint-count">0 transactions</div>
+        <div class="card-value" id="stat-usdc-total">$0</div>
+        <div class="card-sub" id="stat-usdc-sub">0 transactions (≥$100M)</div>
       </div>
 
       <div class="stat-card card-glow-orange">
         <div class="card-header">
-          <span class="card-icon">💥</span>
-          <span class="card-label">24H USDC BURNED</span>
+          <span class="card-icon">🟧</span>
+          <span class="card-label">24H BTC EXCHANGE FLOW</span>
         </div>
-        <div class="card-value" id="stat-usdc-burn">$0</div>
-        <div class="card-sub" id="stat-usdc-burn-count">0 transactions</div>
+        <div class="card-value" id="stat-btc-total">$0</div>
+        <div class="card-sub" id="stat-btc-sub">0 whale txs (≥$100M)</div>
+      </div>
+
+      <div class="stat-card card-glow-purple">
+        <div class="card-header">
+          <span class="card-icon">🔷</span>
+          <span class="card-label">24H ETH EXCHANGE FLOW</span>
+        </div>
+        <div class="card-value" id="stat-eth-total">$0</div>
+        <div class="card-sub" id="stat-eth-sub">0 whale txs (≥$100M)</div>
       </div>
     </section>
 
@@ -93,18 +93,23 @@
       </div>
       <div class="health-item">
         <span class="health-dot dot-green"></span>
-        <span class="health-title">Database:</span>
-        <span class="health-val" id="health-db">MongoDB Connected</span>
+        <span class="health-title">BTC Price:</span>
+        <span class="health-val" id="health-btc-price">$...</span>
+      </div>
+      <div class="health-item">
+        <span class="health-dot dot-green"></span>
+        <span class="health-title">ETH Price:</span>
+        <span class="health-val" id="health-eth-price">$...</span>
+      </div>
+      <div class="health-item">
+        <span class="health-dot dot-green"></span>
+        <span class="health-title">Threshold:</span>
+        <span class="health-val" id="health-threshold">≥ $100M</span>
       </div>
       <div class="health-item">
         <span class="health-dot dot-green"></span>
         <span class="health-title">Bot Subscribers:</span>
         <span class="health-val" id="health-subs">0 active</span>
-      </div>
-      <div class="health-item">
-        <span class="health-dot dot-green"></span>
-        <span class="health-title">Total Events:</span>
-        <span class="health-val" id="health-events">0</span>
       </div>
     </section>
 
@@ -112,19 +117,23 @@
     <main class="main-panel">
       <div class="panel-header">
         <div class="panel-title-group">
-          <h2>Live Mint & Burn Stream</h2>
+          <h2>Live Whale & Mint Feed (≥$100M)</h2>
           <span class="live-tag"><span class="pulse-ring"></span> REAL-TIME</span>
         </div>
         <div class="feed-controls">
           <div class="filter-group">
-            <button class="filter-btn active" data-filter="ALL">All Tokens</button>
-            <button class="filter-btn" data-filter="USDT">USDT Only</button>
-            <button class="filter-btn" data-filter="USDC">USDC Only</button>
+            <button class="filter-btn active" data-filter="ALL">All Assets</button>
+            <button class="filter-btn" data-filter="BTC">🟧 BTC</button>
+            <button class="filter-btn" data-filter="ETH">🔷 ETH</button>
+            <button class="filter-btn" data-filter="USDT">💵 USDT</button>
+            <button class="filter-btn" data-filter="USDC">🔵 USDC</button>
           </div>
           <div class="filter-group">
             <button class="filter-btn-type active" data-type="ALL">All Types</button>
             <button class="filter-btn-type" data-type="MINT">🟢 Mints</button>
             <button class="filter-btn-type" data-type="BURN">🔥 Burns</button>
+            <button class="filter-btn-type" data-type="WALLET_TO_EXCHANGE">📥 Inflow</button>
+            <button class="filter-btn-type" data-type="EXCHANGE_TO_WALLET">📤 Outflow</button>
           </div>
         </div>
       </div>
@@ -135,22 +144,23 @@
           <table class="events-table" id="events-table">
             <thead>
               <tr>
-                <th>Type</th>
-                <th>Token</th>
-                <th>Amount (USD)</th>
+                <th>Action</th>
+                <th>Asset</th>
+                <th>USD Valuation</th>
+                <th>Amount</th>
                 <th>From (Source)</th>
                 <th>To (Destination)</th>
-                <th>Block #</th>
+                <th>Network</th>
                 <th>Time (UTC)</th>
-                <th>Tx Explorer</th>
+                <th>Explorer</th>
               </tr>
             </thead>
             <tbody id="events-tbody">
               <tr class="empty-state">
-                <td colspan="8">
+                <td colspan="9">
                   <div class="empty-feed-box">
                     <div class="spinner"></div>
-                    <p>Connecting to Alchemy Ethereum Stream & Loading events...</p>
+                    <p>Connecting to Sentinel Stream & Loading ≥$100M events...</p>
                   </div>
                 </td>
               </tr>
@@ -163,10 +173,10 @@
     <!-- Footer -->
     <footer class="app-footer">
       <div class="footer-left">
-        <span>Powered by <strong>Alchemy RPC</strong> + <strong>MongoDB Atlas</strong> + <strong>Ethers.js</strong></span>
+        <span>Powered by <strong>Alchemy RPC</strong> + <strong>Mempool API</strong> + <strong>MongoDB Atlas</strong> + <strong>Grammy</strong></span>
       </div>
       <div class="footer-right">
-        <span>Mint Father &copy; 2026 | Real-time Stablecoin Intelligence</span>
+        <span>Mint Father &copy; 2026 | Real-time ≥$100M Sentinel</span>
       </div>
     </footer>
   </div>

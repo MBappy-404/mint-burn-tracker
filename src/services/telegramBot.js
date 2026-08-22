@@ -2,12 +2,12 @@ import { Bot, InlineKeyboard, Keyboard } from 'grammy';
 import { Subscriber } from '../models/Subscriber.js';
 import { Event } from '../models/Event.js';
 import { logger } from '../config/logger.js';
-import { TOKENS, EXPLORER_BASE, getEntityLabel } from '../config/constants.js';
+import { TOKENS, EXPLORER_BASE, getEntityLabel, getExchangeName } from '../config/constants.js';
 
 let bot = null;
 let botInfo = null;
 
-// Helper to format currency numbers compactly (e.g., $100K, $25.5M, $1B)
+// Helper to format currency numbers compactly (e.g., $100M, $250M, $1.2B)
 export function formatCompactUSD(num, includeDollar = true) {
   if (num === undefined || num === null || isNaN(num)) {
     return includeDollar ? '$0' : '0';
@@ -43,7 +43,7 @@ export function formatCurrency(amount) {
   }).format(amount);
 }
 
-// Parse user threshold inputs supporting suffixes like 100k, 5M, 1B
+// Parse user threshold inputs supporting suffixes like 100M, 250M, 1B
 export function parseThresholdInput(str) {
   if (!str) return NaN;
   const clean = str.replace(/[\$,]/g, '').trim().toUpperCase();
@@ -64,54 +64,66 @@ export function parseThresholdInput(str) {
 
 // Generate rich mobile-friendly Markdown alert text
 export function formatAlertMessage(event) {
+  const tokenMeta = TOKENS[event.token] || { icon: '🪙', symbol: event.token };
+  const compactUsd = formatCompactUSD(event.valueUsd || event.amountFormatted);
+  const fullUsd = formatCurrency(event.valueUsd || event.amountFormatted);
+  const explorerUrl = event.explorerUrl || (event.network === 'Bitcoin' ? `https://mempool.space/tx/${event.txHash}` : `${EXPLORER_BASE}/tx/${event.txHash}`);
+
   let header = '';
   let actionDetails = '';
-  const tokenMeta = TOKENS[event.token] || { icon: '🪙', symbol: event.token };
-  const compactAmount = formatCompactUSD(event.amountFormatted);
-  const fullAmount = formatCurrency(event.amountFormatted);
 
   if (event.eventType === 'MINT') {
-    header = `🟢 *${event.token} MINT / ISSUED* ${tokenMeta.icon}`;
-    actionDetails = `🏛️ *Minter:* \`${event.fromLabel || getEntityLabel(event.from)}\`\n📥 *Recipient:* [${event.toLabel || getEntityLabel(event.to)}](${EXPLORER_BASE}/address/${event.to})`;
+    header = `🟢 *${event.token} NATIVE MINT* ${tokenMeta.icon} 🚨`;
+    actionDetails = `🏛️ *Minter:* \`${event.fromLabel || 'Tether / Circle Treasury'}\`\n📥 *Recipient:* \`${event.toLabel || getEntityLabel(event.to)}\``;
   } else if (event.eventType === 'BURN') {
-    header = `🔥 *${event.token} BURN / REDEEMED* 💥`;
-    actionDetails = `📤 *Sender:* [${event.fromLabel || getEntityLabel(event.from)}](${EXPLORER_BASE}/address/${event.from})\n🔥 *Burner:* \`${event.toLabel || getEntityLabel(event.to)}\``;
-  } else if (event.eventType === 'TREASURY_TRANSFER') {
-    header = `🏛️ *${event.token} TREASURY MOVEMENT* 🚨`;
-    actionDetails = `📤 *From:* [${event.fromLabel || getEntityLabel(event.from)}](${EXPLORER_BASE}/address/${event.from})\n📥 *To:* [${event.toLabel || getEntityLabel(event.to)}](${EXPLORER_BASE}/address/${event.to})`;
+    header = `🔥 *${event.token} NATIVE BURN* 💥 🚨`;
+    actionDetails = `📤 *Burner:* \`${event.fromLabel || getEntityLabel(event.from)}\`\n🔥 *Destination:* \`Null / Treasury Burn\``;
+  } else if (event.eventType === 'WALLET_TO_EXCHANGE') {
+    header = `📥 *${event.token} INFLOW: WALLET ➔ EXCHANGE* ${tokenMeta.icon} 🚨`;
+    actionDetails = `👤 *From (Wallet):* \`${event.fromLabel || getEntityLabel(event.from)}\`\n🏦 *To (Exchange):* \`${event.toLabel || event.exchangeName || 'Exchange'}\``;
+  } else if (event.eventType === 'EXCHANGE_TO_WALLET') {
+    header = `📤 *${event.token} OUTFLOW: EXCHANGE ➔ WALLET* ${tokenMeta.icon} 🚨`;
+    actionDetails = `🏦 *From (Exchange):* \`${event.fromLabel || event.exchangeName || 'Exchange'}\`\n👤 *To (Wallet):* \`${event.toLabel || getEntityLabel(event.to)}\``;
   } else {
-    header = `🐋 *${event.token} WHALE TRANSFER* 🌊`;
-    actionDetails = `📤 *From:* [${event.fromLabel || getEntityLabel(event.from)}](${EXPLORER_BASE}/address/${event.from})\n📥 *To:* [${event.toLabel || getEntityLabel(event.to)}](${EXPLORER_BASE}/address/${event.to})`;
+    header = `🚨 *${event.token} MAJOR TRANSFER* ${tokenMeta.icon}`;
+    actionDetails = `📤 *From:* \`${event.fromLabel || getEntityLabel(event.from)}\`\n📥 *To:* \`${event.toLabel || getEntityLabel(event.to)}\``;
+  }
+
+  let amountLine = '';
+  if (event.token === 'BTC' || event.token === 'ETH') {
+    const cryptoFormatted = Number(event.amountFormatted).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    amountLine = `💰 *Value:* \`${compactUsd}\` (${cryptoFormatted} ${event.token} ≈ ${fullUsd})\n`;
+  } else {
+    amountLine = `💰 *Amount:* \`${compactUsd}\` (${fullUsd} ${event.token})\n`;
   }
 
   let message = `━━━━━━━━━━━━━━━━━━━━━\n`;
   message += `${header}\n`;
   message += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-  message += `💰 *Amount:* \`${compactAmount}\` (${fullAmount} ${event.token})\n`;
+  message += amountLine;
   message += `🌐 *Network:* ${event.network || 'Ethereum Mainnet'}\n`;
   message += `📦 *Block:* \`#${event.blockNumber?.toLocaleString() || 'N/A'}\`\n\n`;
   message += `${actionDetails}\n\n`;
   message += `⏰ *Time:* \`${new Date(event.timestamp || Date.now()).toUTCString()}\`\n`;
-  message += `🔗 *Tx:* [\`${event.txHash.substring(0, 10)}...${event.txHash.substring(event.txHash.length - 8)}\`](${EXPLORER_BASE}/tx/${event.txHash})`;
+  message += `🔗 *Tx:* [\`${event.txHash.substring(0, 10)}...${event.txHash.substring(event.txHash.length - 8)}\`](${explorerUrl})`;
 
   return message;
 }
 
 export function createAlertKeyboard(event) {
+  const explorerUrl = event.explorerUrl || (event.network === 'Bitcoin' ? `https://mempool.space/tx/${event.txHash}` : `${EXPLORER_BASE}/tx/${event.txHash}`);
   const keyboard = new InlineKeyboard()
-    .url('🔎 View on Etherscan', `${EXPLORER_BASE}/tx/${event.txHash}`)
-    .row()
-    .url('🪙 Token Contract', TOKENS[event.token]?.explorer || `${EXPLORER_BASE}/token/${event.token}`);
+    .url('🔎 View On-Chain Explorer', explorerUrl);
   return keyboard;
 }
 
-// Persistent bottom Reply Keyboard (Mobile optimized!)
+// Persistent bottom Reply Keyboard (Mobile optimized)
 export function getPersistentMobileKeyboard() {
   return new Keyboard()
     .text('📊 Bot Status').text('📈 24h Stats').row()
     .text('📜 Recent Events').text('⚙️ Alert Threshold').row()
-    .text('🧪 Test USDT Alert').text('🧪 Test USDC Alert').row()
-    .text('🏛️ Test Treasury Move').text('🔔 Toggle Alerts')
+    .text('🧪 Test USDT Mint').text('🧪 Test BTC Inflow').row()
+    .text('🧪 Test ETH Outflow').text('🔔 Toggle Alerts')
     .resized()
     .persistent();
 }
@@ -125,24 +137,21 @@ export function getMainInlineKeyboard() {
     .text('📜 Recent Events', 'cmd_recent')
     .text('⚙️ Set Threshold', 'cmd_threshold_menu')
     .row()
-    .text('🟢 Test USDT Mint', 'test_usdt_mint')
-    .text('🔥 Test USDT Burn', 'test_usdt_burn')
+    .text('🟢 Test USDT Mint (≥$100M)', 'test_usdt_mint')
+    .text('🔥 Test USDC Burn (≥$100M)', 'test_usdc_burn')
     .row()
-    .text('🏛️ Test Treasury Move', 'test_treasury_move');
+    .text('📥 Test BTC Inflow (≥$100M)', 'test_btc_inflow')
+    .text('📤 Test ETH Outflow (≥$100M)', 'test_eth_outflow');
 }
 
-// Inline Threshold Quick Selector Keyboard
+// Inline Threshold Quick Selector Keyboard (Focused on ≥$100M)
 export function getThresholdSelectorKeyboard() {
   return new InlineKeyboard()
-    .text('$10K', 'set_th_10000')
-    .text('$50K', 'set_th_50000')
-    .text('$100K', 'set_th_100000')
+    .text('🎯 $100M (Standard)', 'set_th_100000000')
+    .text('$200M', 'set_th_200000000')
     .row()
-    .text('$500K', 'set_th_500000')
-    .text('$1M', 'set_th_1000000')
-    .text('$5M', 'set_th_5000000')
-    .row()
-    .text('⚡ All Events ($0)', 'set_th_0')
+    .text('$500M (Mega Whale)', 'set_th_500000000')
+    .text('$1B (Institutional)', 'set_th_1000000000')
     .row()
     .text('🔙 Back to Menu', 'cmd_menu');
 }
@@ -175,6 +184,8 @@ export async function initTelegramBot() {
           chatType,
           username,
           title,
+          minThresholdUsd: 100_000_000,
+          tokens: ['BTC', 'ETH', 'USDT', 'USDC'],
           isActive: true
         },
         { upsert: true, new: true }
@@ -183,15 +194,15 @@ export async function initTelegramBot() {
       const welcomeText = 
 `👑 *WELCOME TO MINT FATHER BOT!* 🚀
 
-Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
-• 🟢 **Mints / Issuances**
-• 🔥 **Burns / Redemptions**
-• 🏛️ **Tether Treasury Movements**
+Real-time Sentinel tracking **$\ge \$100\text{M}$** Institutional Movements:
+1. 🏦 **BTC & ETH:** Wallet ➔ Exchange (Inflows) & Exchange ➔ Wallet (Outflows)
+2. 💵 **USDT & USDC:** Native Mints & Burns directly from Treasury
+3. 🎯 **Strict Filtering:** Only transactions **$\ge \$100,000,000 USD**
 
 🔔 *Status:* Alerts are **ACTIVE**
-⚙️ *Current Threshold:* \`$100K+\`
+⚙️ *Current Threshold:* \`$100M+\`
 
-📱 *Mobile Controls:* You can use the bottom touch buttons anytime, or use the interactive menu below:`;
+📱 *Mobile Controls:* Tap any quick button below to test or configure:`;
 
       await ctx.reply(welcomeText, {
         parse_mode: 'Markdown',
@@ -213,9 +224,9 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
   bot.hears('📈 24h Stats', async (ctx) => sendStatsReply(ctx));
   bot.hears('📜 Recent Events', async (ctx) => sendRecentReply(ctx));
   bot.hears('⚙️ Alert Threshold', async (ctx) => sendThresholdMenuReply(ctx));
-  bot.hears('🧪 Test USDT Alert', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'USDT_MINT'));
-  bot.hears('🧪 Test USDC Alert', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'USDC_MINT'));
-  bot.hears('🏛️ Test Treasury Move', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'TREASURY_MOVE'));
+  bot.hears('🧪 Test USDT Mint', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'USDT_MINT'));
+  bot.hears('🧪 Test BTC Inflow', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'BTC_INFLOW'));
+  bot.hears('🧪 Test ETH Outflow', async (ctx) => sendCustomTestAlert(ctx.chat.id.toString(), 'ETH_OUTFLOW'));
   bot.hears('🔔 Toggle Alerts', async (ctx) => toggleAlertsReply(ctx));
 
   // Commands
@@ -243,7 +254,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
       const newThreshold = parseThresholdInput(parts[1]);
 
       if (isNaN(newThreshold) || newThreshold < 0) {
-        return ctx.reply('❌ Invalid amount. Please enter a valid number (e.g., `/threshold 100k`, `/threshold 1M`, `/threshold 250000`).', { parse_mode: 'Markdown' });
+        return ctx.reply('❌ Invalid amount. Please enter a valid number (e.g., `/threshold 100M`, `/threshold 250M`, `/threshold 1B`).', { parse_mode: 'Markdown' });
       }
 
       await Subscriber.findOneAndUpdate(
@@ -252,7 +263,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
         { upsert: true }
       );
 
-      return ctx.reply(`✅ *Threshold Updated!* You will now receive alerts for transactions of \`${formatCompactUSD(newThreshold)}\` (${formatCurrency(newThreshold)}) and above.`, { parse_mode: 'Markdown' });
+      return ctx.reply(`✅ *Threshold Updated!* You will receive alerts for transactions of \`${formatCompactUSD(newThreshold)}\` (${formatCurrency(newThreshold)}) and above.`, { parse_mode: 'Markdown' });
     } catch (err) {
       logger.error('Error handling /threshold:', err.message);
       ctx.reply('❌ Error updating threshold.');
@@ -274,7 +285,7 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
     try {
       const chatId = ctx.chat.id.toString();
       await Subscriber.findOneAndUpdate({ chatId }, { isActive: true });
-      ctx.reply('🔔 *Alerts Resumed!* You will now receive instant mint, burn, and treasury alerts.', { parse_mode: 'Markdown' });
+      ctx.reply('🔔 *Alerts Resumed!* You will receive real-time notifications for ≥$100M movements.', { parse_mode: 'Markdown' });
     } catch (e) {
       ctx.reply('❌ Error resuming alerts.');
     }
@@ -311,27 +322,39 @@ Real-time on-chain sentinel tracking **USDT (Tether)** and **USDC (Circle)**:
         { minThresholdUsd: amount, isActive: true },
         { upsert: true }
       );
-      await ctx.reply(`✅ *Alert Threshold Updated to:* \`${formatCompactUSD(amount)}\` (${formatCurrency(amount)})\nTransactions above this amount will trigger instant notifications.`, {
+      await ctx.reply(`✅ *Alert Threshold Updated to:* \`${formatCompactUSD(amount)}\` (${formatCurrency(amount)})\nNotifications will trigger for transactions >= this amount.`, {
         parse_mode: 'Markdown'
       });
     } else if (data === 'test_usdt_mint') {
       await sendCustomTestAlert(ctx.chat.id.toString(), 'USDT_MINT');
-    } else if (data === 'test_usdt_burn') {
-      await sendCustomTestAlert(ctx.chat.id.toString(), 'USDT_BURN');
-    } else if (data === 'test_treasury_move') {
-      await sendCustomTestAlert(ctx.chat.id.toString(), 'TREASURY_MOVE');
+    } else if (data === 'test_usdc_burn') {
+      await sendCustomTestAlert(ctx.chat.id.toString(), 'USDC_BURN');
+    } else if (data === 'test_btc_inflow') {
+      await sendCustomTestAlert(ctx.chat.id.toString(), 'BTC_INFLOW');
+    } else if (data === 'test_eth_outflow') {
+      await sendCustomTestAlert(ctx.chat.id.toString(), 'ETH_OUTFLOW');
     }
   });
 
-  // Start the bot polling
-  botInfo = await bot.api.getMe();
-  logger.info(`🤖 Telegram Bot initialized: @${botInfo.username} (${botInfo.first_name})`);
+  // Start the bot polling with error handling
+  try {
+    botInfo = await bot.api.getMe();
+    logger.info(`🤖 Telegram Bot initialized: @${botInfo.username} (${botInfo.first_name})`);
 
-  bot.start({
-    onStart: (botInfo) => {
-      logger.info(`🚀 Telegram bot polling started for @${botInfo.username}`);
-    }
-  });
+    bot.start({
+      onStart: (info) => {
+        logger.info(`🚀 Telegram bot polling started for @${info.username}`);
+      }
+    }).catch((err) => {
+      if (err.error_code === 409 || err.message?.includes('409') || err.message?.includes('Conflict')) {
+        logger.warn('⚠️ Telegram bot polling notice (409 Conflict - another instance active). Alert broadcaster remains active.');
+      } else {
+        logger.error('Telegram bot polling error:', err.message);
+      }
+    });
+  } catch (initErr) {
+    logger.error('Telegram Bot getMe error:', initErr.message);
+  }
 
   return bot;
 }
@@ -343,15 +366,17 @@ async function sendStatusReply(ctx) {
     const totalEvents = await Event.countDocuments();
     const lastEvent = await Event.findOne().sort({ timestamp: -1 });
 
-    let reply = `📊 *MINT FATHER BOT STATUS*\n\n`;
+    let reply = `📊 *MINT FATHER SENTINEL STATUS*\n\n`;
     reply += `🤖 *Bot:* @${botInfo?.username || 'MintFatherBot'} (Online ✅)\n`;
     reply += `👥 *Active Subscribers:* \`${subscriberCount}\`\n`;
-    reply += `📦 *Total Events Recorded:* \`${totalEvents.toLocaleString()}\`\n`;
-    reply += `🌐 *Network Monitored:* Ethereum Mainnet\n`;
-    reply += `🪙 *Tokens Monitored:* USDT (Tether), USDC (Circle)\n`;
+    reply += `📦 *Total Events Recorded (≥$100M):* \`${totalEvents.toLocaleString()}\`\n`;
+    reply += `🌐 *Networks Monitored:* Ethereum Mainnet + Bitcoin\n`;
+    reply += `🪙 *Tokens Monitored:*\n`;
+    reply += `  • 💵 **USDT & USDC:** Native Mints & Burns (≥$100M)\n`;
+    reply += `  • 🟧 **BTC & ETH:** Wallet ➔ Exchange & Exchange ➔ Wallet (≥$100M)\n`;
     
     if (lastEvent) {
-      reply += `\n🕒 *Last Event:* ${lastEvent.token} ${lastEvent.eventType} (\`${formatCompactUSD(lastEvent.amountFormatted)}\`) - \`${new Date(lastEvent.timestamp).toLocaleTimeString()}\``;
+      reply += `\n🕒 *Last Event:* ${lastEvent.token} ${lastEvent.eventType} (\`${formatCompactUSD(lastEvent.valueUsd || lastEvent.amountFormatted)}\`) - \`${new Date(lastEvent.timestamp).toLocaleTimeString()}\``;
     }
 
     await ctx.reply(reply, { parse_mode: 'Markdown' });
@@ -370,54 +395,26 @@ async function sendStatsReply(ctx) {
       {
         $group: {
           _id: { token: '$token', eventType: '$eventType' },
-          totalAmount: { $sum: '$amountFormatted' },
+          totalAmount: { $sum: '$valueUsd' },
           count: { $sum: 1 }
         }
       }
     ]);
 
-    let usdtMint24 = 0, usdtBurn24 = 0;
-    let usdcMint24 = 0, usdcBurn24 = 0;
-    let usdtMintCount = 0, usdtBurnCount = 0;
-    let usdcMintCount = 0, usdcBurnCount = 0;
-
+    let msg = `📈 *24-HOUR INSTITUTIONAL SUMMARY (≥$100M)*\n\n`;
+    
+    const tokenSummary = { BTC: 0, ETH: 0, USDT: 0, USDC: 0 };
     stats24h.forEach(stat => {
-      if (stat._id.token === 'USDT') {
-        if (stat._id.eventType === 'MINT') {
-          usdtMint24 = stat.totalAmount;
-          usdtMintCount = stat.count;
-        } else {
-          usdtBurn24 = stat.totalAmount;
-          usdtBurnCount = stat.count;
-        }
-      } else if (stat._id.token === 'USDC') {
-        if (stat._id.eventType === 'MINT') {
-          usdcMint24 = stat.totalAmount;
-          usdcMintCount = stat.count;
-        } else {
-          usdcBurn24 = stat.totalAmount;
-          usdcBurnCount = stat.count;
-        }
-      }
+      tokenSummary[stat._id.token] = (tokenSummary[stat._id.token] || 0) + stat.totalAmount;
     });
 
-    let msg = `📈 *24-HOUR MINT & BURN SUMMARY*\n\n`;
-    msg += `💵 *USDT (Tether):*\n`;
-    msg += `  🟢 Minted: \`${formatCompactUSD(usdtMint24)}\` (${usdtMintCount} txs)\n`;
-    msg += `  🔥 Burned: \`${formatCompactUSD(usdtBurn24)}\` (${usdtBurnCount} txs)\n`;
-    msg += `  📊 Net Change: \`${formatCompactUSD(usdtMint24 - usdtBurn24)}\`\n\n`;
+    msg += `🟧 *BTC Exchange Flow:* \`${formatCompactUSD(tokenSummary.BTC)}\`\n`;
+    msg += `🔷 *ETH Exchange Flow:* \`${formatCompactUSD(tokenSummary.ETH)}\`\n`;
+    msg += `💵 *USDT Mints/Burns:* \`${formatCompactUSD(tokenSummary.USDT)}\`\n`;
+    msg += `🔵 *USDC Mints/Burns:* \`${formatCompactUSD(tokenSummary.USDC)}\`\n\n`;
 
-    msg += `🔵 *USDC (Circle):*\n`;
-    msg += `  🟢 Minted: \`${formatCompactUSD(usdcMint24)}\` (${usdcMintCount} txs)\n`;
-    msg += `  🔥 Burned: \`${formatCompactUSD(usdcBurn24)}\` (${usdcBurnCount} txs)\n`;
-    msg += `  📊 Net Change: \`${formatCompactUSD(usdcMint24 - usdcBurn24)}\`\n\n`;
-
-    const totalMinted = usdtMint24 + usdcMint24;
-    const totalBurned = usdtBurn24 + usdcBurn24;
-    msg += `🌐 *Total 24h Stablecoin Flow:*\n`;
-    msg += `➕ Minted: \`${formatCompactUSD(totalMinted)}\`\n`;
-    msg += `➖ Burned: \`${formatCompactUSD(totalBurned)}\`\n`;
-    msg += `🎯 Net Liquidity: \`${formatCompactUSD(totalMinted - totalBurned)}\``;
+    const totalVolume = tokenSummary.BTC + tokenSummary.ETH + tokenSummary.USDT + tokenSummary.USDC;
+    msg += `🌐 *Total 24h Major Liquidity:* \`${formatCompactUSD(totalVolume)}\``;
 
     await ctx.reply(msg, { parse_mode: 'Markdown' });
   } catch (err) {
@@ -431,15 +428,15 @@ async function sendRecentReply(ctx) {
     const recent = await Event.find().sort({ timestamp: -1 }).limit(5);
 
     if (recent.length === 0) {
-      return ctx.reply('📜 No mint or burn events recorded yet. Stay tuned as new blocks are processed!');
+      return ctx.reply('📜 No major events (≥$100M) recorded recently.');
     }
 
-    let msg = `📜 *LATEST 5 MINT & BURN EVENTS:*\n\n`;
+    let msg = `📜 *LATEST 5 MAJOR EVENTS (≥$100M):*\n\n`;
     recent.forEach((ev, idx) => {
-      const icon = ev.eventType === 'MINT' ? '🟢' : '🔥';
       const timeStr = new Date(ev.timestamp).toISOString().replace('T', ' ').substring(0, 19);
-      msg += `${idx + 1}. ${icon} *${ev.token} ${ev.eventType}*: \`${formatCompactUSD(ev.amountFormatted)}\` (${formatCurrency(ev.amountFormatted)})\n`;
-      msg += `   ⏰ \`${timeStr} UTC\` | [Tx](${EXPLORER_BASE}/tx/${ev.txHash})\n\n`;
+      const val = formatCompactUSD(ev.valueUsd || ev.amountFormatted);
+      msg += `${idx + 1}. *${ev.token} ${ev.eventType}*: \`${val}\`\n`;
+      msg += `   ⏰ \`${timeStr} UTC\` | [Tx](${ev.explorerUrl})\n\n`;
     });
 
     await ctx.reply(msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
@@ -452,14 +449,14 @@ async function sendThresholdMenuReply(ctx) {
   try {
     const chatId = ctx.chat.id.toString();
     const sub = await Subscriber.findOne({ chatId });
-    const current = sub ? formatCompactUSD(sub.minThresholdUsd) : '$100K';
+    const current = sub ? formatCompactUSD(sub.minThresholdUsd) : '$100M';
 
     const text = 
 `⚙️ *ALERT THRESHOLD SETTINGS*
 
-Current Minimum: \`${current}\`
+Current Minimum: \`${current}\` (Default: $100M)
 
-Tap a button below to quickly set your notification threshold, or type your own amount (e.g. \`/threshold 250k\` or \`/threshold 250000\`):`;
+Tap a button below or type your custom amount (e.g. \`/threshold 100M\` or \`/threshold 500M\`):`;
 
     await ctx.reply(text, {
       parse_mode: 'Markdown',
@@ -483,7 +480,7 @@ async function toggleAlertsReply(ctx) {
     );
 
     if (newState) {
-      await ctx.reply('🔔 *Alerts are now ACTIVE!* You will receive real-time notifications for mints & burns.', { parse_mode: 'Markdown' });
+      await ctx.reply('🔔 *Alerts are now ACTIVE!* You will receive notifications for ≥$100M transactions.', { parse_mode: 'Markdown' });
     } else {
       await ctx.reply('🔕 *Alerts PAUSED!* Notifications are muted for this chat. Tap "🔔 Toggle Alerts" anytime to resume.', { parse_mode: 'Markdown' });
     }
@@ -505,59 +502,69 @@ export async function sendCustomTestAlert(chatId, testType = 'USDT_MINT') {
       eventType: 'MINT',
       amount: '1000000000000000',
       amountFormatted: 1000000000,
+      valueUsd: 1000000000,
       from: '0x0000000000000000000000000000000000000000',
       to: '0x5754284f345afc66a98fbb0a0afe71e0f007b949',
-      fromLabel: '🔥 Null Address',
+      fromLabel: '🔥 Null / Black Hole',
       toLabel: '🏦 Tether Treasury',
-      network: 'Ethereum Mainnet'
+      network: 'Ethereum',
+      explorerUrl: 'https://etherscan.io/tx/0x32c58611116f1d87e07a34685ff86cb310a08e6840742f534891b97ad8c65f97'
     };
-  } else if (testType === 'USDT_BURN') {
+  } else if (testType === 'USDC_BURN') {
     sampleEvent = {
       txHash: '0x88df6d28e60bf45b60be79116e04d41e7d9b9f939e6a0d4c92e1e0a29352e850',
       logIndex: 1,
       blockNumber: 25808632,
       timestamp: new Date(),
-      token: 'USDT',
+      token: 'USDC',
       eventType: 'BURN',
-      amount: '500000000000000',
-      amountFormatted: 500000000,
-      from: '0x5754284f345afc66a98fbb0a0afe71e0f007b949',
-      to: '0x0000000000000000000000000000000000000000',
-      fromLabel: '🏦 Tether Treasury',
-      toLabel: '🔥 Null Address (Burn)',
-      network: 'Ethereum Mainnet'
-    };
-  } else if (testType === 'TREASURY_MOVE') {
-    sampleEvent = {
-      txHash: '0x99fe7a22026afc66a98fbb0a0afe71e0f007b949112233445566778899aabbcc',
-      logIndex: 2,
-      blockNumber: 25808635,
-      timestamp: new Date(),
-      token: 'USDT',
-      eventType: 'TREASURY_TRANSFER',
       amount: '150000000000000',
       amountFormatted: 150000000,
-      from: '0x5754284f345afc66a98fbb0a0afe71e0f007b949',
-      to: '0x28c6c06298d514db089934071355e5743bf21d60',
-      fromLabel: '🏦 Tether Treasury',
-      toLabel: '🟡 Binance: Hot Wallet 14',
-      network: 'Ethereum Mainnet'
+      valueUsd: 150000000,
+      from: '0x55fe002a30f5c73e9504b7b72ed222a00461b018',
+      to: '0x0000000000000000000000000000000000000000',
+      fromLabel: '🏦 Circle: Minter',
+      toLabel: '🔥 Null / Black Hole',
+      network: 'Ethereum',
+      explorerUrl: 'https://etherscan.io/tx/0x88df6d28e60bf45b60be79116e04d41e7d9b9f939e6a0d4c92e1e0a29352e850'
     };
-  } else {
+  } else if (testType === 'BTC_INFLOW') {
     sampleEvent = {
-      txHash: '0x55aa6d28e60bf45b60be79116e04d41e7d9b9f939e6a0d4c92e1e0a29352e123',
-      logIndex: 1,
+      txHash: 'a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d',
+      logIndex: 0,
+      blockNumber: 885120,
+      timestamp: new Date(),
+      token: 'BTC',
+      eventType: 'WALLET_TO_EXCHANGE',
+      amount: '2000',
+      amountFormatted: 2000,
+      valueUsd: 130000000,
+      from: '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
+      to: '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo',
+      fromLabel: 'Whale Wallet (1A1z...vfNa)',
+      toLabel: 'Binance: Cold Storage',
+      exchangeName: 'Binance',
+      network: 'Bitcoin',
+      explorerUrl: 'https://mempool.space/tx/a1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d'
+    };
+  } else if (testType === 'ETH_OUTFLOW') {
+    sampleEvent = {
+      txHash: '0x4f877c4456950293297a74ea86307137f81498b0a1b2c3d4e5f60718293a4b5c',
+      logIndex: 0,
       blockNumber: 25808640,
       timestamp: new Date(),
-      token: 'USDC',
-      eventType: 'MINT',
-      amount: '50000000000000',
-      amountFormatted: 50000000,
-      from: '0x55fe002a30f5c73e9504b7b72ed222a00461b018',
-      to: '0x503828976d22510aad0201ac7ec88293211d23da',
-      fromLabel: '🏦 Circle: Minter',
-      toLabel: '🔵 Coinbase: Hot Wallet',
-      network: 'Ethereum Mainnet'
+      token: 'ETH',
+      eventType: 'EXCHANGE_TO_WALLET',
+      amount: '40000',
+      amountFormatted: 40000,
+      valueUsd: 112000000,
+      from: '0x28c6c06298d514db089934071355e5743bf21d60',
+      to: '0xd8da6bf26964af9d7eed9e03e53415d37aa96045',
+      fromLabel: 'Binance: Hot Wallet 14',
+      toLabel: 'Whale Wallet (vitalik.eth)',
+      exchangeName: 'Binance',
+      network: 'Ethereum',
+      explorerUrl: 'https://etherscan.io/tx/0x4f877c4456950293297a74ea86307137f81498b0a1b2c3d4e5f60718293a4b5c'
     };
   }
 
@@ -577,115 +584,40 @@ export async function sendTestAlert(chatId) {
   return sendCustomTestAlert(chatId, 'USDT_MINT');
 }
 
-// Broadcast queue for 1-minute batch dispatch
-let pendingAlertQueue = [];
-let dispatcherInterval = null;
-
-/**
- * Queue an event to be dispatched in the 1-minute cycle
- */
-export function queueEventForBroadcast(event) {
-  pendingAlertQueue.push(event);
-}
-
-/**
- * Start the 1-minute batch alert dispatcher
- */
-export function startAlertDispatcher() {
-  if (dispatcherInterval) return;
-
-  const intervalMs = Number(process.env.ALERT_INTERVAL_MS) || 60000; // Default 1 minute (60,000 ms)
-  logger.info(`⏰ 1-Minute Alert Dispatcher initialized (cycles every ${intervalMs / 1000}s). Only big amounts will trigger notifications.`);
-
-  dispatcherInterval = setInterval(async () => {
-    try {
-      await flushAlertQueue();
-    } catch (err) {
-      logger.error('Error in alert dispatcher cycle:', err.message);
-    }
-  }, intervalMs);
-}
-
-/**
- * Flush and dispatch matching big events to subscribers
- */
-export async function flushAlertQueue() {
-  if (!bot || pendingAlertQueue.length === 0) {
-    return;
-  }
-
-  // Drain pending queue
-  const eventsToProcess = pendingAlertQueue.splice(0, pendingAlertQueue.length);
-  logger.debug(`Processing 1-minute batch with ${eventsToProcess.length} event(s)...`);
+// Broadcast an event immediately to all active subscribers meeting threshold (>= $100M)
+export async function broadcastEvent(event) {
+  if (!bot) return;
 
   try {
     const activeSubscribers = await Subscriber.find({ isActive: true });
-    if (!activeSubscribers.length) return;
+    if (!activeSubscribers || !activeSubscribers.length) return;
+
+    const eventValue = event.valueUsd || event.amountFormatted;
 
     for (const sub of activeSubscribers) {
-      const minThreshold = sub.minThresholdUsd !== undefined ? sub.minThresholdUsd : (Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000);
-      
-      // Filter big amount events that meet this subscriber's threshold and token preference
-      const matchingEvents = eventsToProcess.filter(ev => 
-        ev.amountFormatted >= minThreshold && 
-        (sub.tokens && sub.tokens.includes(ev.token))
-      );
+      const minThreshold = sub.minThresholdUsd !== undefined 
+        ? sub.minThresholdUsd 
+        : (Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100_000_000);
 
-      if (matchingEvents.length === 0) {
-        // No big events for this user in this 1-minute window -> Stay quiet!
-        continue;
-      }
+      const isAllowedToken = !sub.tokens || sub.tokens.length === 0 || sub.tokens.includes(event.token);
 
-      // Sort matching events by amount descending (biggest first)
-      matchingEvents.sort((a, b) => b.amountFormatted - a.amountFormatted);
-
-      logger.info(`📢 Dispatching ${matchingEvents.length} big event(s) to @${sub.username || sub.chatId} (Threshold: $${minThreshold.toLocaleString()})`);
-
-      // If up to 3 events, send individual rich cards
-      if (matchingEvents.length <= 3) {
-        for (const event of matchingEvents) {
-          const message = formatAlertMessage(event);
-          const keyboard = createAlertKeyboard(event);
-          try {
-            await bot.api.sendMessage(sub.chatId, message, {
-              parse_mode: 'Markdown',
-              reply_markup: keyboard,
-              disable_web_page_preview: false
-            });
-          } catch (sendErr) {
-            handleSendError(sub, sendErr);
-          }
-        }
-      } else {
-        // If more than 3 big events happened in this minute, send a consolidated bundle to avoid flooding
-        const topEvents = matchingEvents.slice(0, 3);
-        for (const event of topEvents) {
-          const message = formatAlertMessage(event);
-          const keyboard = createAlertKeyboard(event);
-          try {
-            await bot.api.sendMessage(sub.chatId, message, {
-              parse_mode: 'Markdown',
-              reply_markup: keyboard,
-              disable_web_page_preview: false
-            });
-          } catch (sendErr) {
-            handleSendError(sub, sendErr);
-          }
-        }
-
-        const remainingCount = matchingEvents.length - 3;
-        const totalVolume = matchingEvents.reduce((acc, curr) => acc + curr.amountFormatted, 0);
-        const summaryMsg = `⚡ *+${remainingCount} more major transactions* in this 1-minute window!\n💰 *Total 1-Min Batch Volume:* \`${formatCurrency(totalVolume)}\`\n👉 Check live dashboard for full breakdown.`;
-        
+      if (eventValue >= minThreshold && isAllowedToken) {
+        const message = formatAlertMessage(event);
+        const keyboard = createAlertKeyboard(event);
         try {
-          await bot.api.sendMessage(sub.chatId, summaryMsg, { parse_mode: 'Markdown' });
+          await bot.api.sendMessage(sub.chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard,
+            disable_web_page_preview: false
+          });
+          logger.info(`📢 Alert dispatched to @${sub.username || sub.chatId}: ${event.token} ${event.eventType} (${formatCompactUSD(eventValue)})`);
         } catch (sendErr) {
           handleSendError(sub, sendErr);
         }
       }
     }
   } catch (err) {
-    logger.error('Error during batch broadcast:', err.message);
+    logger.error('Error during broadcastEvent:', err.message);
   }
 }
 
@@ -698,42 +630,6 @@ function handleSendError(sub, sendErr) {
   }
 }
 
-// Broadcast an event immediately to all active subscribers meeting threshold
-export async function broadcastEvent(event) {
-  if (!bot) return;
-
-  try {
-    const activeSubscribers = await Subscriber.find({ isActive: true });
-    if (!activeSubscribers || !activeSubscribers.length) return;
-
-    for (const sub of activeSubscribers) {
-      const minThreshold = sub.minThresholdUsd !== undefined 
-        ? sub.minThresholdUsd 
-        : (Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100000);
-
-      const isAllowedToken = !sub.tokens || sub.tokens.length === 0 || sub.tokens.includes(event.token);
-
-      if (event.amountFormatted >= minThreshold && isAllowedToken) {
-        const message = formatAlertMessage(event);
-        const keyboard = createAlertKeyboard(event);
-        try {
-          await bot.api.sendMessage(sub.chatId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: keyboard,
-            disable_web_page_preview: false
-          });
-          logger.info(`📢 Alert dispatched to @${sub.username || sub.chatId}: ${event.token} ${event.eventType} (${formatCompactUSD(event.amountFormatted)})`);
-        } catch (sendErr) {
-          handleSendError(sub, sendErr);
-        }
-      }
-    }
-  } catch (err) {
-    logger.error('Error during broadcastEvent:', err.message);
-  }
-}
-
 export function getBotInfo() {
   return botInfo;
 }
-
