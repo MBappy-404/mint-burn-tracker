@@ -155,7 +155,7 @@ function renderEventsTable(events) {
   }).join('');
 }
 
-// Connect to Server-Sent Events (SSE) Live Feed
+// Connect to Server-Sent Events (SSE) Live Feed for real-time major events
 function setupSSE() {
   const eventSource = new EventSource('/api/stream');
 
@@ -164,13 +164,16 @@ function setupSSE() {
       const data = JSON.parse(event.data);
       if (data.type === 'CONNECTED') return;
 
-      // New event received in real-time
+      // Only real data >= $10,000 USD
+      if (!data.amountFormatted || data.amountFormatted < 10000) return;
+
+      // New verified event received
       eventsList.unshift(data);
       if (eventsList.length > 100) eventsList.pop();
 
-      // Show toast notification
+      // Show clean toast for real institutional transactions
       const icon = data.eventType === 'MINT' ? '🟢 MINT' : '🔥 BURN';
-      showToast(`${icon}: ${formatUSD(data.amountFormatted)} ${data.token} detected!`, data.eventType.toLowerCase());
+      showToast(`${icon}: ${formatUSD(data.amountFormatted)} ${data.token} verified on-chain!`, data.eventType.toLowerCase());
 
       renderEventsTable(eventsList);
       fetchStatusAndStats();
@@ -180,7 +183,7 @@ function setupSSE() {
   };
 
   eventSource.onerror = () => {
-    setTimeout(setupSSE, 5000);
+    setTimeout(setupSSE, 10000);
   };
 }
 
@@ -190,8 +193,11 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchEvents();
   setupSSE();
 
-  // Polling fallback for status updates
-  setInterval(fetchStatusAndStats, 10000);
+  // 1-Minute Interval Sync (Exactly every 60 seconds)
+  setInterval(() => {
+    fetchStatusAndStats();
+    fetchEvents();
+  }, 60000);
 
   // Token filters
   document.querySelectorAll('.filter-btn').forEach(btn => {

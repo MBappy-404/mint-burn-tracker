@@ -70,6 +70,12 @@ export async function processMintBurnEvent({
     const remainder = amountBigInt % divisor;
     const amountFormatted = Number(wholePart) + (Number(remainder) / (10 ** decimals));
 
+    // STRICT REAL DATA FILTER: Discard 0 USD, sub-cent dust, and micro-routing transactions (< $10,000 USD)
+    const minStorageUsd = Number(process.env.MIN_RECORD_USD) || 10000;
+    if (amountFormatted < minStorageUsd || isNaN(amountFormatted) || amountFormatted <= 0) {
+      return null;
+    }
+
     const fromLabel = getEntityLabel(from);
     const toLabel = getEntityLabel(to);
 
