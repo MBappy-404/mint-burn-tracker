@@ -234,4 +234,110 @@ document.addEventListener('DOMContentLoaded', () => {
       testBtn.textContent = '🧪 Trigger Test Alert';
     }
   });
+
+  // Database Cleanup Modal Controls
+  const cleanupModal = document.getElementById('cleanup-modal');
+  const btnOpenCleanup = document.getElementById('btn-open-cleanup-modal');
+  const btnCloseCleanup = document.getElementById('btn-close-cleanup-modal');
+  const modalDbCount = document.getElementById('modal-db-count');
+
+  function openCleanupModal() {
+    modalDbCount.textContent = document.getElementById('health-events').textContent;
+    cleanupModal.classList.add('active');
+  }
+
+  function closeCleanupModal() {
+    cleanupModal.classList.remove('active');
+  }
+
+  if (btnOpenCleanup) btnOpenCleanup.addEventListener('click', openCleanupModal);
+  if (btnCloseCleanup) btnCloseCleanup.addEventListener('click', closeCleanupModal);
+  if (cleanupModal) {
+    cleanupModal.addEventListener('click', (e) => {
+      if (e.target === cleanupModal) closeCleanupModal();
+    });
+  }
+
+  // Execute Cleanup API Request
+  async function executeCleanup(payload, confirmMessage) {
+    if (confirmMessage && !confirm(confirmMessage)) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/events/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await res.json();
+      if (result.success) {
+        showToast(`🗑️ ${result.message}`, 'success');
+        modalDbCount.textContent = result.remainingCount.toLocaleString();
+        document.getElementById('health-events').textContent = result.remainingCount.toLocaleString();
+        
+        // Refresh table & stats
+        fetchEvents();
+        fetchStatusAndStats();
+      } else {
+        showToast(`❌ Cleanup Failed: ${result.error}`, 'error');
+      }
+    } catch (err) {
+      showToast('❌ Network error during cleanup request.', 'error');
+    }
+  }
+
+  // Preset buttons
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-mode');
+      const hours = btn.getAttribute('data-hours');
+      const days = btn.getAttribute('data-days');
+
+      let label = 'selected time period';
+      if (hours) label = `older than ${hours} hours`;
+      if (days) label = `older than ${days} days`;
+
+      executeCleanup(
+        { mode, hours, olderThanDays: days },
+        `Are you sure you want to delete all transaction records ${label}?`
+      );
+    });
+  });
+
+  // Date Range Button
+  const btnDeleteRange = document.getElementById('btn-delete-range');
+  if (btnDeleteRange) {
+    btnDeleteRange.addEventListener('click', () => {
+      const fromVal = document.getElementById('cleanup-from-date').value;
+      const toVal = document.getElementById('cleanup-to-date').value;
+
+      if (!fromVal || !toVal) {
+        showToast('⚠️ Please select both Start Date and End Date.', 'error');
+        return;
+      }
+
+      if (new Date(fromVal) > new Date(toVal)) {
+        showToast('⚠️ Start Date cannot be after End Date.', 'error');
+        return;
+      }
+
+      executeCleanup(
+        { mode: 'RANGE', fromDate: fromVal, toDate: toVal },
+        `Are you sure you want to delete all records between ${new Date(fromVal).toLocaleString()} and ${new Date(toVal).toLocaleString()}?`
+      );
+    });
+  }
+
+  // Delete ALL Button
+  const btnDeleteAll = document.getElementById('btn-delete-all');
+  if (btnDeleteAll) {
+    btnDeleteAll.addEventListener('click', () => {
+      executeCleanup(
+        { mode: 'ALL' },
+        '🚨 WARNING: Are you sure you want to DELETE ALL transaction records from the database? This action is permanent and cannot be undone!'
+      );
+    });
+  }
 });

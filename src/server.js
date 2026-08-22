@@ -193,6 +193,53 @@ app.post('/api/backfill', async (req, res) => {
   }
 });
 
+// 7. Data Cleanup / Deletion Endpoint
+app.post('/api/events/delete', async (req, res) => {
+  try {
+    const { mode, fromDate, toDate, olderThanDays, hours } = req.body;
+    let deleteFilter = {};
+
+    if (mode === 'ALL') {
+      deleteFilter = {};
+    } else if (mode === 'RANGE') {
+      if (!fromDate || !toDate) {
+        return res.status(400).json({ success: false, error: 'Both Start Date and End Date are required' });
+      }
+      deleteFilter = {
+        timestamp: {
+          $gte: new Date(fromDate),
+          $lte: new Date(toDate)
+        }
+      };
+    } else if (mode === 'OLDER_THAN_HOURS') {
+      const h = Number(hours) || 24;
+      const cutoff = new Date(Date.now() - h * 60 * 60 * 1000);
+      deleteFilter = { timestamp: { $lt: cutoff } };
+    } else if (mode === 'OLDER_THAN_DAYS') {
+      const d = Number(olderThanDays) || 7;
+      const cutoff = new Date(Date.now() - d * 24 * 60 * 60 * 1000);
+      deleteFilter = { timestamp: { $lt: cutoff } };
+    } else {
+      return res.status(400).json({ success: false, error: 'Invalid delete mode' });
+    }
+
+    const result = await Event.deleteMany(deleteFilter);
+    const remainingCount = await Event.countDocuments();
+
+    logger.info(`🗑️ Data cleanup executed: Mode '${mode}' removed ${result.deletedCount} events. Remaining: ${remainingCount}`);
+
+    res.json({
+      success: true,
+      deletedCount: result.deletedCount,
+      remainingCount,
+      message: `Successfully deleted ${result.deletedCount} transaction events.`
+    });
+  } catch (err) {
+    logger.error('Error during data cleanup:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Start Server & Services
 async function bootstrap() {
   try {

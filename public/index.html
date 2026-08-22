@@ -32,6 +32,9 @@
           <span class="pulse-dot"></span>
           <span id="bot-status-text">LISTENING ON-CHAIN</span>
         </div>
+        <button id="btn-open-cleanup-modal" class="btn btn-danger-outline" title="Manage database storage and delete old records">
+          🗑️ Cleanup DB
+        </button>
         <button id="btn-test-alert" class="btn btn-secondary">
           🧪 Trigger Test Alert
         </button>
@@ -166,6 +169,71 @@
         <span>Mint Father &copy; 2026 | Real-time Stablecoin Intelligence</span>
       </div>
     </footer>
+  </div>
+
+  <!-- Database Cleanup & Maintenance Modal -->
+  <div id="cleanup-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="modal-icon">🗑️</span>
+          <h3>Database Cleanup & Maintenance</h3>
+        </div>
+        <button id="btn-close-cleanup-modal" class="modal-close-btn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="db-stats-badge">
+          <span>📦 Total Events Currently in Database:</span>
+          <strong id="modal-db-count">...</strong>
+        </div>
+
+        <!-- Option 1: Quick Cleanup Presets -->
+        <div class="cleanup-section">
+          <h4>⚡ Quick Cleanup Presets</h4>
+          <p class="section-desc">Instantly purge historical records to keep MongoDB lightweight:</p>
+          <div class="preset-buttons-grid">
+            <button class="btn btn-preset" data-mode="OLDER_THAN_HOURS" data-hours="24">
+              🕒 Delete Older Than 24h
+            </button>
+            <button class="btn btn-preset" data-mode="OLDER_THAN_DAYS" data-days="7">
+              📅 Delete Older Than 7 Days
+            </button>
+            <button class="btn btn-preset" data-mode="OLDER_THAN_DAYS" data-days="30">
+              🗓️ Delete Older Than 30 Days
+            </button>
+          </div>
+        </div>
+
+        <!-- Option 2: Date Range Filter -->
+        <div class="cleanup-section">
+          <h4>📆 Delete by Custom Date Range</h4>
+          <p class="section-desc">Select specific start and end timestamps to delete data within that window:</p>
+          <div class="range-inputs-grid">
+            <div class="input-group">
+              <label for="cleanup-from-date">From (Start Date & Time):</label>
+              <input type="datetime-local" id="cleanup-from-date" class="form-control">
+            </div>
+            <div class="input-group">
+              <label for="cleanup-to-date">To (End Date & Time):</label>
+              <input type="datetime-local" id="cleanup-to-date" class="form-control">
+            </div>
+          </div>
+          <button id="btn-delete-range" class="btn btn-warning-action">
+            🗑️ Delete Selected Date Range
+          </button>
+        </div>
+
+        <!-- Option 3: Danger Zone - Delete All -->
+        <div class="cleanup-section danger-section">
+          <h4>🚨 Danger Zone (Complete Reset)</h4>
+          <p class="section-desc">Erase <strong>ALL</strong> recorded transactions and reset database events to 0:</p>
+          <button id="btn-delete-all" class="btn btn-danger-action">
+            💣 Delete ALL Records (Reset DB)
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="toast-container" class="toast-container"></div>
