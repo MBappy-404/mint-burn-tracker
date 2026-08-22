@@ -156,14 +156,10 @@ app.post('/api/test-alert', async (req, res) => {
   try {
     const subscriber = await Subscriber.findOne({ isActive: true });
     const testData = await sendTestAlert(subscriber?.chatId);
-    
-    // Also broadcast to live web UI
-    broadcastToWeb(testData);
 
     res.json({
       success: true,
-      message: 'Test alert dispatched successfully!',
-      event: testData,
+      message: 'Test alert dispatched to Telegram subscriber!',
       sentToChatId: subscriber?.chatId || 'None (No active subscriber yet)'
     });
   } catch (err) {
