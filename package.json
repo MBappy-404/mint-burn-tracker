@@ -1,0 +1,37 @@
+{
+  "name": "mint-father",
+  "version": "1.0.0",
+  "description": "Real-time USDT & USDC Mint and Burn monitoring Telegram Bot with MongoDB storage and live Web Dashboard",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test:db": "node src/scripts/testDb.js",
+    "test:bot": "node src/scripts/testBot.js",
+    "test:rpc": "node src/scripts/testRpc.js"
+  },
+  "keywords": [
+    "ethereum",
+    "usdt",
+    "usdc",
+    "mint",
+    "burn",
+    "telegram-bot",
+    "crypto-tracker",
+    "alchemy",
+    "mongodb"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "express": "^4.21.2",
+    "grammy": "^1.34.0",
+    "mongoose": "^8.10.1",
+    "winston": "^3.17.0"
+  }
+}
