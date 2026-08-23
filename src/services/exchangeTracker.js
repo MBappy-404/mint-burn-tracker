@@ -86,6 +86,29 @@ export async function scanEthBlockForWhaleTxs(provider, blockNumber) {
   }
 }
 
+// Helper to fetch from Bitcoin explorer with fallback & timeout
+async function fetchBtcApi(endpoint) {
+  const providers = [
+    'https://blockstream.info/api',
+    'https://mempool.space/api'
+  ];
+
+  for (const base of providers) {
+    try {
+      const res = await fetch(`${base}${endpoint}`, {
+        signal: AbortSignal.timeout(6000),
+        headers: { 'User-Agent': 'MintFather/1.0' }
+      });
+      if (res.ok) {
+        return res;
+      }
+    } catch (e) {
+      // Try next provider
+    }
+  }
+  return null;
+}
+
 /**
  * Scan a Bitcoin Block for major transactions (>= $100M)
  */
@@ -95,13 +118,17 @@ export async function checkRecentBtcBlocks() {
 
   try {
     const btcPrice = getTokenPriceUsd('BTC');
-    // 1. Fetch current Bitcoin Tip Height (1 lightweight HTTP request)
-    const tipRes = await fetch('https://mempool.space/api/blocks/tip/height');
-    if (!tipRes.ok) {
+    // 1. Fetch current Bitcoin Tip Height (lightweight HTTP request with fallback)
+    const tipRes = await fetchBtcApi('/blocks/tip/height');
+    if (!tipRes) {
       isBtcScanning = false;
       return;
     }
     const currentTipHeight = parseInt(await tipRes.text(), 10);
+    if (isNaN(currentTipHeight) || currentTipHeight <= 0) {
+      isBtcScanning = false;
+      return;
+    }
 
     if (!lastProcessedBtcHeight) {
       lastProcessedBtcHeight = currentTipHeight - 1;
@@ -113,14 +140,16 @@ export async function checkRecentBtcBlocks() {
     if (currentTipHeight > lastProcessedBtcHeight) {
       for (let height = lastProcessedBtcHeight + 1; height <= currentTipHeight; height++) {
         // Fetch block hash
-        const hashRes = await fetch(`https://mempool.space/api/block-height/${height}`);
-        if (!hashRes.ok) continue;
-        const blockHash = await hashRes.text();
+        const hashRes = await fetchBtcApi(`/block-height/${height}`);
+        if (!hashRes) continue;
+        const blockHash = (await hashRes.text()).trim();
+        if (!blockHash) continue;
 
         // Fetch block transactions
-        const txsRes = await fetch(`https://mempool.space/api/block/${blockHash}/txs/0`);
-        if (!txsRes.ok) continue;
+        const txsRes = await fetchBtcApi(`/block/${blockHash}/txs/0`);
+        if (!txsRes) continue;
         const txs = await txsRes.json();
+        if (!Array.isArray(txs)) continue;
 
         for (const tx of txs) {
           if (!tx.vout || !tx.vin) continue;
@@ -130,8 +159,9 @@ export async function checkRecentBtcBlocks() {
           const btcAmount = totalSatoshis / 100_000_000;
           const valueUsd = btcAmount * btcPrice;
 
-          // STRICT USER RULE: Only process transactions >= $100,000,000 USD
-          if (valueUsd < 100_000_000) {
+          // Minimum threshold check
+          const minThreshold = Number(process.env.DEFAULT_MIN_THRESHOLD_USD) || 100_000_000;
+          if (valueUsd < minThreshold) {
             continue;
           }
 

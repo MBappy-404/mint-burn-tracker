@@ -265,5 +265,14 @@ async function bootstrap() {
   }
 }
 
+// Prevent unexpected crashes from killing the bot server
+process.on('uncaughtException', (err) => {
+  logger.error('⚠️ Uncaught Exception caught (process guarded):', err.message);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('⚠️ Unhandled Promise Rejection caught (process guarded):', reason?.message || reason);
+});
+
 // Run bootstrap
 bootstrap();

@@ -178,6 +178,12 @@ async function startFallbackPoller() {
         lastProcessedBlock = currentBlock - 1;
       }
 
+      // If the poller fell too far behind (e.g., system sleep or downtime), sync to recent blocks
+      if (currentBlock - lastProcessedBlock > 20) {
+        logger.info(`⏩ Catching up block scanner from #${lastProcessedBlock} to recent #${currentBlock - 8}`);
+        lastProcessedBlock = currentBlock - 8;
+      }
+
       if (currentBlock > lastProcessedBlock) {
         const fromBlock = lastProcessedBlock + 1;
         const toBlock = currentBlock;
@@ -206,6 +212,10 @@ async function startFallbackPoller() {
       }
     } catch (err) {
       logger.warn('Poller cycle warning:', err.message);
+      // Advance lastProcessedBlock slightly so it does not get stuck in an unrecoverable loop
+      if (lastProcessedBlock > 0) {
+        lastProcessedBlock += 1;
+      }
     } finally {
       setTimeout(poll, pollInterval);
     }
@@ -215,12 +225,12 @@ async function startFallbackPoller() {
 }
 
 /**
- * Query logs with strict server-side topic filtering
+ * Query logs with strict server-side topic filtering (Alchemy Free Tier safe <= 8 blocks)
  */
 export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromBlock, toBlock) {
   try {
     const iface = new ethers.Interface(abi);
-    const MAX_CHUNK = 50; // Safe chunk size when topic-filtered
+    const MAX_CHUNK = 8; // Alchemy Free tier limit is 10 blocks max
 
     for (let start = fromBlock; start <= toBlock; start += MAX_CHUNK) {
       const end = Math.min(start + MAX_CHUNK - 1, toBlock);
@@ -239,7 +249,6 @@ export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromB
 
           if (parsed.name === 'Issue') {
             const rawAmount = parsed.args[0].toString();
-            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
             const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
@@ -255,7 +264,6 @@ export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromB
             });
           } else if (parsed.name === 'Redeem') {
             const rawAmount = parsed.args[0].toString();
-            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
             const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
@@ -271,7 +279,6 @@ export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromB
             });
           } else if (parsed.name === 'Mint') {
             const rawAmount = (parsed.args.amount || parsed.args[2]).toString();
-            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
             const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
@@ -287,7 +294,6 @@ export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromB
             });
           } else if (parsed.name === 'Burn') {
             const rawAmount = (parsed.args.amount || parsed.args[1]).toString();
-            if (BigInt(rawAmount) < 100_000_000_000_000n) continue; // >= $100M
             const timestamp = await getBlockTimestamp(httpProvider, log.blockNumber);
             await processMintBurnEvent({
               txHash: log.transactionHash,
@@ -312,6 +318,46 @@ export async function checkTokenLogs(contractAddress, abi, symbol, topics, fromB
   }
 }
 
+let isReconnectingWs = false;
+
+function setupWebSocket(wssUrl) {
+  if (!wssUrl || isReconnectingWs) return;
+  try {
+    if (wsProvider) {
+      try { wsProvider.destroy(); } catch (e) {}
+    }
+
+    wsProvider = new ethers.WebSocketProvider(wssUrl);
+
+    const usdtContract = new ethers.Contract(TOKENS.USDT.address, CONTRACT_ABIS.USDT, wsProvider);
+    const usdcContract = new ethers.Contract(TOKENS.USDC.address, CONTRACT_ABIS.USDC, wsProvider);
+
+    setupUsdtListeners(usdtContract, wsProvider);
+    setupUsdcListeners(usdcContract, wsProvider);
+
+    if (wsProvider.websocket) {
+      wsProvider.websocket.on('close', (code) => {
+        logger.warn(` Alchemy WebSocket closed (code ${code}). Reconnecting in 5s...`);
+        if (!isReconnectingWs) {
+          isReconnectingWs = true;
+          setTimeout(() => {
+            isReconnectingWs = false;
+            setupWebSocket(wssUrl);
+          }, 5000);
+        }
+      });
+
+      wsProvider.websocket.on('error', (err) => {
+        logger.error(' Alchemy WebSocket error:', err.message);
+      });
+    }
+
+    logger.info('⚡ Alchemy WebSocket stream active for Native USDT & USDC Mints/Burns!');
+  } catch (wsErr) {
+    logger.warn(' WebSocket initialization warning (Fallback poller will handle events):', wsErr.message);
+  }
+}
+
 /**
  * Initialize Blockchain Listener with WebSocket & HTTP Providers
  */
@@ -333,29 +379,7 @@ export async function initBlockchainListener() {
 
   // 2. Initialize WebSocket Provider if available
   if (wssUrl) {
-    try {
-      wsProvider = new ethers.WebSocketProvider(wssUrl);
-      
-      const usdtContract = new ethers.Contract(TOKENS.USDT.address, CONTRACT_ABIS.USDT, wsProvider);
-      const usdcContract = new ethers.Contract(TOKENS.USDC.address, CONTRACT_ABIS.USDC, wsProvider);
-
-      // Listen ONLY to native Mint & Burn events
-      setupUsdtListeners(usdtContract, wsProvider);
-      setupUsdcListeners(usdcContract, wsProvider);
-
-      wsProvider.websocket.on('close', (code) => {
-        logger.warn(` Alchemy WebSocket closed (code ${code}). Reconnecting in 5s...`);
-        setTimeout(initBlockchainListener, 5000);
-      });
-
-      wsProvider.websocket.on('error', (err) => {
-        logger.error(' Alchemy WebSocket error:', err.message);
-      });
-
-      logger.info('⚡ Alchemy WebSocket stream active for Native USDT & USDC Mints/Burns!');
-    } catch (wsErr) {
-      logger.warn(' WebSocket initialization warning (Fallback poller will handle events):', wsErr.message);
-    }
+    setupWebSocket(wssUrl);
   }
 
   // 3. Start Fallback Poller with server-side topic filtering

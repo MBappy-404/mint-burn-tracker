@@ -144,13 +144,17 @@ export function getMainInlineKeyboard() {
     .text('📤 Test ETH Outflow (≥$100M)', 'test_eth_outflow');
 }
 
-// Inline Threshold Quick Selector Keyboard (Focused on ≥$100M)
+// Inline Threshold Quick Selector Keyboard (Flexible Whale & Sentinel Thresholds)
 export function getThresholdSelectorKeyboard() {
   return new InlineKeyboard()
-    .text('🎯 $100M (Standard)', 'set_th_100000000')
-    .text('$200M', 'set_th_200000000')
+    .text('$10M', 'set_th_10000000')
+    .text('$25M', 'set_th_25000000')
+    .text('$50M', 'set_th_50000000')
     .row()
-    .text('$500M (Mega Whale)', 'set_th_500000000')
+    .text('🎯 $100M (Standard)', 'set_th_100000000')
+    .text('$250M', 'set_th_250000000')
+    .row()
+    .text('$500M (Whale)', 'set_th_500000000')
     .text('$1B (Institutional)', 'set_th_1000000000')
     .row()
     .text('🔙 Back to Menu', 'cmd_menu');
